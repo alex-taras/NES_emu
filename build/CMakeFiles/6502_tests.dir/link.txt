@@ -1,0 +1,1 @@
+/usr/bin/cc -g -Wl,--dependency-file=CMakeFiles/6502_tests.dir/link.d CMakeFiles/6502_tests.dir/tests.c.o CMakeFiles/6502_tests.dir/cpu.c.o CMakeFiles/6502_tests.dir/bus.c.o CMakeFiles/6502_tests.dir/memory.c.o -o 6502_tests

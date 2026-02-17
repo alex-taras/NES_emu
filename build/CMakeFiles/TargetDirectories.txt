@@ -1,0 +1,4 @@
+/home/alext/Work/6502_emu/build/CMakeFiles/6502_emu.dir
+/home/alext/Work/6502_emu/build/CMakeFiles/6502_tests.dir
+/home/alext/Work/6502_emu/build/CMakeFiles/edit_cache.dir
+/home/alext/Work/6502_emu/build/CMakeFiles/rebuild_cache.dir

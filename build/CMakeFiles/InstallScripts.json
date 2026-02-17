@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/alext/Work/6502_emu/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
