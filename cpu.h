@@ -32,6 +32,9 @@ typedef struct {
 
 void cpu_reset(CPU *cpu);
 
+void stack_push(Byte value, CPU *cpu);
+Byte stack_pop(CPU *cpu);
+
 void cpu_execute(Byte cycles, CPU *cpu);
 
 Byte cpu_read_flag(Flags flag, CPU *cpu);
