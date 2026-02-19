@@ -4,6 +4,7 @@
 
 #include "bus.h"
 #include "opcodes.h"
+#include "util.h"
 
 void cpu_reset(CPU *cpu) {
     cpu->PC = 0x01FF; // at least after ZP end
@@ -126,9 +127,23 @@ void set_NZ_flags(CPU *cpu) {
     cpu_set_flag(N, (cpu->regs.A >> 7) & 1, cpu);
 }
 
-Byte read_bit(Byte value, Byte position) {
-    Byte result = (value >> position) & 0x01;
-    return result;
+void set_CMP_flags(Word result, CPU *cpu) {
+    cpu_set_flag(N, read_bit(result & 0xFF, 7), cpu);
+    cpu_set_flag(Z, (result & 0xFF) == 0x00, cpu);
+    cpu_set_flag(C, result <= 0xFF, cpu);
+}
+
+void indexed_CMP_ABS(Byte *cycles, CPU *cpu, Byte index) {
+    Word operand = fetch_program_word(cpu);
+    Word addr = operand + cpu->regs.X;
+    Byte value = bus_read(addr);
+    Word result = cpu->regs.A - value;
+
+    set_CMP_flags(result, cpu);
+
+    Byte extra_cycle = (operand & 0xFF00) != (addr & 0xFF00);
+
+    *cycles -= (4 + extra_cycle);
 }
 
 void cpu_execute(Byte cycles, CPU *cpu) {
@@ -581,6 +596,121 @@ void cpu_execute(Byte cycles, CPU *cpu) {
 
                 cpu->PC = addr;
                 cycles -= 7;
+                break;
+            }
+
+            // --- Clear Flags ---
+            
+            case OPC_CLC_IM: {
+                cpu_set_flag(C, 0x00, cpu);
+                cycles -= 2;
+                break;
+            }
+
+            case OPC_CLD_IM: {
+                cpu_set_flag(D, 0x00, cpu);
+                cycles -= 2;
+                break;
+            }
+            case OPC_CLI_IM: {
+                cpu_set_flag(I, 0x00, cpu);
+                cycles -= 2;
+                break;
+            }
+            case OPC_CLV_IM: {
+                cpu_set_flag(V, 0x00, cpu);
+                cycles -= 2;
+                break;
+            }
+
+            case OPC_CMP_IM: {
+                Byte operand = fetch_program_byte(cpu);
+                Word result = cpu->regs.A - operand;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 2;
+                break;
+            }
+
+            case OPC_CMP_ZP: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte zp_value = bus_read(operand & 0xFF);
+                Word result = cpu->regs.A - zp_value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 3;
+                break;
+            }
+
+            case OPC_CMP_ZPX: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte zp_value = bus_read((operand + cpu->regs.X) & 0xFF);
+                Word result = cpu->regs.A - zp_value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 4;
+                break;
+            }
+
+            case OPC_CMP_ABS: {
+                Word operand = fetch_program_word(cpu);
+                Byte value = bus_read(operand);
+                Word result = cpu->regs.A - value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 4;
+                break;
+            }
+
+            case OPC_CMP_ABSX: {
+                indexed_CMP_ABS(&cycles, cpu, cpu->regs.X);
+                break;
+            }
+
+            case OPC_CMP_ABSY: {
+                indexed_CMP_ABS(&cycles, cpu, cpu->regs.Y);
+                break;
+            }
+
+            case OPC_CMP_INDX: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte wrapped = (operand + cpu->regs.X) & 0xFF;
+                
+                Byte lo = bus_read(wrapped & 0xFF);
+                Byte hi = bus_read((wrapped + 1) & 0xFF);
+                Word addr = lo | (hi << 8);
+                
+                Byte value = bus_read(addr);
+
+                Word result = cpu->regs.A - value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 6;
+                break;
+            }
+
+            case OPC_CMP_INDY: {
+                Byte operand = fetch_program_byte(cpu);
+                
+                Byte lo = bus_read(operand);
+                Byte hi = bus_read((operand + 1) & 0xFF);
+                Word base = lo | (hi << 8);
+                
+                Word addr = base + cpu->regs.Y;
+                Byte extra_cycle = (addr & 0xFF00) != (base & 0xFF00);
+                
+                Byte value = bus_read(addr);
+
+                Word result = cpu->regs.A - value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= (5 + extra_cycle);
                 break;
             }
 
