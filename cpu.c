@@ -600,24 +600,24 @@ void cpu_execute(Byte cycles, CPU *cpu) {
             }
 
             // --- Clear Flags ---
-            
-            case OPC_CLC_IM: {
+
+            case OPC_CLC_IMP: {
                 cpu_set_flag(C, 0x00, cpu);
                 cycles -= 2;
                 break;
             }
 
-            case OPC_CLD_IM: {
+            case OPC_CLD_IMP: {
                 cpu_set_flag(D, 0x00, cpu);
                 cycles -= 2;
                 break;
             }
-            case OPC_CLI_IM: {
+            case OPC_CLI_IMP: {
                 cpu_set_flag(I, 0x00, cpu);
                 cycles -= 2;
                 break;
             }
-            case OPC_CLV_IM: {
+            case OPC_CLV_IMP: {
                 cpu_set_flag(V, 0x00, cpu);
                 cycles -= 2;
                 break;
@@ -711,6 +711,154 @@ void cpu_execute(Byte cycles, CPU *cpu) {
                 set_CMP_flags(result, cpu);
 
                 cycles -= (5 + extra_cycle);
+                break;
+            }
+
+            // --- CPX, CPY ---
+
+            case OPC_CPX_IM: {
+                Byte operand = fetch_program_byte(cpu);
+                Word result = cpu->regs.X - operand;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 2;
+                break;
+            }
+
+            case OPC_CPX_ZP: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte zp_value = bus_read(operand & 0xFF);
+                Word result = cpu->regs.X - zp_value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 3;
+                break;
+            }
+
+            case OPC_CPX_ABS: {
+                Word operand = fetch_program_word(cpu);
+                Byte value = bus_read(operand);
+                Word result = cpu->regs.X - value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 4;
+                break;
+            }
+
+            case OPC_CPY_IM: {
+                Byte operand = fetch_program_byte(cpu);
+                Word result = cpu->regs.Y - operand;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 2;
+                break;
+            }
+
+            case OPC_CPY_ZP: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte zp_value = bus_read(operand & 0xFF);
+                Word result = cpu->regs.Y - zp_value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 3;
+                break;
+            }
+
+            case OPC_CPY_ABS: {
+                Word operand = fetch_program_word(cpu);
+                Byte value = bus_read(operand);
+                Word result = cpu->regs.Y - value;
+
+                set_CMP_flags(result, cpu);
+
+                cycles -= 4;
+                break;
+            }
+
+            // --- DEC ---
+
+            case OPC_DEC_ZP: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte zp_value = bus_read(operand);
+                Word result = zp_value - 1;
+
+                cpu_set_flag(Z, (result & 0xFF) == 0, cpu);
+                cpu_set_flag(N, (result >> 7) & 1, cpu);
+
+                bus_write(operand, result & 0xFF);
+
+                cycles -= 5;
+                break;
+            }
+
+            case OPC_DEC_ZPX: {
+                Byte operand = fetch_program_byte(cpu);
+                Byte zp_addr = operand + cpu->regs.X;
+                Byte zp_value = bus_read(zp_addr);
+                Word result = zp_value - 1;
+
+                cpu_set_flag(Z, (result & 0xFF) == 0, cpu);
+                cpu_set_flag(N, (result >> 7) & 1, cpu);
+
+                bus_write(zp_addr, result & 0xFF);
+
+                cycles -= 6;
+                break;
+            }
+
+            case OPC_DEC_ABS: {
+                Word operand = fetch_program_word(cpu);
+                Byte abs_value = bus_read(operand);
+                Word result = abs_value - 1;
+
+                cpu_set_flag(Z, (result & 0xFF) == 0, cpu);
+                cpu_set_flag(N, (result >> 7) & 1, cpu);
+
+                bus_write(operand, result & 0xFF);
+
+                cycles -= 6;
+                break;
+            }
+
+            case OPC_DEC_ABSX: {
+                Word operand = fetch_program_word(cpu);
+                Word abs_addr = operand + cpu->regs.X;
+                Byte abs_value = bus_read(abs_addr);
+                Word result = abs_value - 1;
+
+                cpu_set_flag(Z, (result & 0xFF) == 0, cpu);
+                cpu_set_flag(N, (result >> 7) & 1, cpu);
+
+                bus_write(abs_addr, result & 0xFF);
+
+                cycles -= 7;
+                break;
+            }
+
+            case OPC_DEX_IMP: {
+                Word result = cpu->regs.X - 1;
+                cpu->regs.X = result & 0xFF;
+
+                cpu_set_flag(Z, (result & 0xFF) == 0, cpu);
+                cpu_set_flag(N, (result >> 7) & 1, cpu);
+
+                cycles -= 2;
+                break;
+            }
+
+            case OPC_DEY_IMP: {
+                Word result = cpu->regs.Y - 1;
+                cpu->regs.Y = result & 0xFF;
+
+                cpu_set_flag(Z, (result & 0xFF) == 0, cpu);
+                cpu_set_flag(N, (result >> 7) & 1, cpu);
+
+                cycles -= 2;
                 break;
             }
 

@@ -56,10 +56,10 @@
 
 #define OPC_BRK_IMP     0x00
 
-#define OPC_CLC_IM      0x18
-#define OPC_CLD_IM      0xD8
-#define OPC_CLI_IM      0x58
-#define OPC_CLV_IM      0xB8
+#define OPC_CLC_IMP     0x18
+#define OPC_CLD_IMP     0xD8
+#define OPC_CLI_IMP     0x58
+#define OPC_CLV_IMP     0xB8
 
 #define OPC_CMP_IM      0xC9
 #define OPC_CMP_ZP      0xC5
@@ -69,5 +69,21 @@
 #define OPC_CMP_ABSY    0xD9
 #define OPC_CMP_INDX    0xC1
 #define OPC_CMP_INDY    0xD1
+
+#define OPC_CPX_IM      0xE0
+#define OPC_CPX_ZP      0xE4
+#define OPC_CPX_ABS     0xEC
+
+#define OPC_CPY_IM      0xC0
+#define OPC_CPY_ZP      0xC4
+#define OPC_CPY_ABS     0xCC
+
+#define OPC_DEC_ZP      0xC6
+#define OPC_DEC_ZPX     0xD6
+#define OPC_DEC_ABS     0xCE
+#define OPC_DEC_ABSX    0xDE
+
+#define OPC_DEX_IMP     0xCA
+#define OPC_DEY_IMP     0x88
 
 #endif

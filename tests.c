@@ -1609,6 +1609,637 @@ void test_stack() {
     }
 }
 
+// --- Clear Flag Tests ---
+
+void test_clear_flags() {
+    printf("\n========== CLEAR FLAG TESTS ==========\n");
+
+    // CLC - Clear Carry
+    {
+        test_reset();
+        test_header("CLC - clear carry flag");
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(PRG_START, OPC_CLC_IMP);
+        print_program(PRG_START, 1);
+        printf(" Before:\n");
+        print_flags(&cpu);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    // CLD - Clear Decimal
+    {
+        test_reset();
+        test_header("CLD - clear decimal flag");
+        cpu_set_flag(D, 1, &cpu);
+        bus_write(PRG_START, OPC_CLD_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        print_flags(&cpu);
+        check("D == 0", cpu_read_flag(D, &cpu) == 0);
+    }
+
+    // CLI - Clear Interrupt Disable
+    {
+        test_reset();
+        test_header("CLI - clear interrupt disable flag");
+        cpu_set_flag(I, 1, &cpu);
+        bus_write(PRG_START, OPC_CLI_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        print_flags(&cpu);
+        check("I == 0", cpu_read_flag(I, &cpu) == 0);
+    }
+
+    // CLV - Clear Overflow
+    {
+        test_reset();
+        test_header("CLV - clear overflow flag");
+        cpu_set_flag(V, 1, &cpu);
+        bus_write(PRG_START, OPC_CLV_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        print_flags(&cpu);
+        check("V == 0", cpu_read_flag(V, &cpu) == 0);
+    }
+}
+
+// --- CMP Tests ---
+
+void test_cmp() {
+    printf("\n========== CMP TESTS ==========\n");
+
+    // CMP IM - A > operand (C=1, Z=0, N=0)
+    {
+        test_reset();
+        test_header("CMP IM - A=0x50 vs 0x30 (A > operand)");
+        cpu.regs.A = 0x50;
+        bus_write(PRG_START, OPC_CMP_IM);
+        bus_write(PRG_START + 1, 0x30);
+        print_program(PRG_START, 2);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("A unchanged == 0x50", cpu.regs.A == 0x50);
+        check("C == 1 (A >= operand)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 0 (A != operand)", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0 (positive result)", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // CMP IM - A == operand (C=1, Z=1, N=0)
+    {
+        test_reset();
+        test_header("CMP IM - A=0x42 vs 0x42 (A == operand)");
+        cpu.regs.A = 0x42;
+        bus_write(PRG_START, OPC_CMP_IM);
+        bus_write(PRG_START + 1, 0x42);
+        print_program(PRG_START, 2);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1 (A >= operand)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1 (A == operand)", cpu_read_flag(Z, &cpu) == 1);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // CMP IM - A < operand (C=0, Z=0, N=1)
+    {
+        test_reset();
+        test_header("CMP IM - A=0x30 vs 0x50 (A < operand)");
+        cpu.regs.A = 0x30;
+        bus_write(PRG_START, OPC_CMP_IM);
+        bus_write(PRG_START + 1, 0x50);
+        print_program(PRG_START, 2);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0 (A < operand)", cpu_read_flag(C, &cpu) == 0);
+        check("Z == 0 (A != operand)", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 1 (negative result)", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    // CMP ZP
+    {
+        test_reset();
+        test_header("CMP ZP - A=0x80 vs ZP[0x10]=0x80 (equal)");
+        cpu.regs.A = 0x80;
+        bus_write(0x10, 0x80);
+        bus_write(PRG_START, OPC_CMP_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        print_program(PRG_START, 2);
+
+        cpu_execute(3, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    // CMP ZPX
+    {
+        test_reset();
+        test_header("CMP ZP,X - A=0x70 vs ZP[0x10+X=0x05]=0x60");
+        cpu.regs.A = 0x70;
+        cpu.regs.X = 0x05;
+        bus_write(0x15, 0x60);
+        bus_write(PRG_START, OPC_CMP_ZPX);
+        bus_write(PRG_START + 1, 0x10);
+        print_program(PRG_START, 2);
+
+        cpu_execute(4, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1 (A > operand)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    // CMP ABS
+    {
+        test_reset();
+        test_header("CMP ABS - A=0x20 vs mem[0x0300]=0x40");
+        cpu.regs.A = 0x20;
+        bus_write(DATA_PAGE, 0x40);
+        bus_write(PRG_START, OPC_CMP_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(4, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0 (A < operand)", cpu_read_flag(C, &cpu) == 0);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    // CMP ABSX - no page cross
+    {
+        test_reset();
+        test_header("CMP ABS,X - no page cross");
+        cpu.regs.A = 0xFF;
+        cpu.regs.X = 0x05;
+        bus_write(DATA_PAGE + 0x05, 0xFF);
+        bus_write(PRG_START, OPC_CMP_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(4, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1 (equal)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1 (equal)", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    // CMP ABSY - page cross
+    {
+        test_reset();
+        test_header("CMP ABS,Y - page cross");
+        cpu.regs.A = 0x01;
+        cpu.regs.Y = 0x05;
+        bus_write(0x0403, 0x02);
+        bus_write(PRG_START, OPC_CMP_ABSY);
+        bus_write_word(PRG_START + 1, 0x03FE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(5, &cpu);  // +1 for page cross
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0 (A < operand)", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    // CMP (INDX)
+    {
+        test_reset();
+        test_header("CMP (IND,X) - A=0x88 vs mem");
+        cpu.regs.A = 0x88;
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x00);
+        bus_write(0x25, 0x03);
+        bus_write(DATA_PAGE, 0x88);
+        bus_write(PRG_START, OPC_CMP_INDX);
+        bus_write(PRG_START + 1, 0x20);
+        print_program(PRG_START, 2);
+
+        cpu_execute(6, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1 (equal)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1 (equal)", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    // CMP (INDY) - no page cross
+    {
+        test_reset();
+        test_header("CMP (IND),Y - A=0x10 vs mem=0x20");
+        cpu.regs.A = 0x10;
+        cpu.regs.Y = 0x05;
+        bus_write(0x30, 0x00);
+        bus_write(0x31, 0x03);
+        bus_write(0x0305, 0x20);
+        bus_write(PRG_START, OPC_CMP_INDY);
+        bus_write(PRG_START + 1, 0x30);
+        print_program(PRG_START, 2);
+
+        cpu_execute(5, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0 (A < operand)", cpu_read_flag(C, &cpu) == 0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
+// --- CPX/CPY Tests ---
+
+void test_cpx_cpy() {
+    printf("\n========== CPX/CPY TESTS ==========\n");
+
+    // CPX IM - X > operand
+    {
+        test_reset();
+        test_header("CPX IM - X=0x50 vs 0x30 (X > operand)");
+        cpu.regs.X = 0x50;
+        bus_write(PRG_START, OPC_CPX_IM);
+        bus_write(PRG_START + 1, 0x30);
+        print_program(PRG_START, 2);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("X unchanged == 0x50", cpu.regs.X == 0x50);
+        check("C == 1 (X >= operand)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // CPX IM - X == operand
+    {
+        test_reset();
+        test_header("CPX IM - X=0x42 vs 0x42 (equal)");
+        cpu.regs.X = 0x42;
+        bus_write(PRG_START, OPC_CPX_IM);
+        bus_write(PRG_START + 1, 0x42);
+        print_program(PRG_START, 2);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    // CPX ZP
+    {
+        test_reset();
+        test_header("CPX ZP - X=0x20 vs ZP[0x10]=0x30");
+        cpu.regs.X = 0x20;
+        bus_write(0x10, 0x30);
+        bus_write(PRG_START, OPC_CPX_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        print_program(PRG_START, 2);
+
+        cpu_execute(3, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0 (X < operand)", cpu_read_flag(C, &cpu) == 0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    // CPX ABS
+    {
+        test_reset();
+        test_header("CPX ABS - X=0xFF vs mem[0x0300]=0x01");
+        cpu.regs.X = 0xFF;
+        bus_write(DATA_PAGE, 0x01);
+        bus_write(PRG_START, OPC_CPX_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(4, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1 (X > operand)", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    // CPY IM - Y > operand
+    {
+        test_reset();
+        test_header("CPY IM - Y=0x80 vs 0x40 (Y > operand)");
+        cpu.regs.Y = 0x80;
+        bus_write(PRG_START, OPC_CPY_IM);
+        bus_write(PRG_START + 1, 0x40);
+        print_program(PRG_START, 2);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("Y unchanged == 0x80", cpu.regs.Y == 0x80);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    // CPY ZP - Y == operand
+    {
+        test_reset();
+        test_header("CPY ZP - Y=0x55 vs ZP[0x20]=0x55 (equal)");
+        cpu.regs.Y = 0x55;
+        bus_write(0x20, 0x55);
+        bus_write(PRG_START, OPC_CPY_ZP);
+        bus_write(PRG_START + 1, 0x20);
+        print_program(PRG_START, 2);
+
+        cpu_execute(3, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    // CPY ABS - Y < operand
+    {
+        test_reset();
+        test_header("CPY ABS - Y=0x10 vs mem[0x0300]=0x20");
+        cpu.regs.Y = 0x10;
+        bus_write(DATA_PAGE, 0x20);
+        bus_write(PRG_START, OPC_CPY_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(4, &cpu);
+
+        printf(" After:\n");
+        print_flags(&cpu);
+        check("C == 0 (Y < operand)", cpu_read_flag(C, &cpu) == 0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
+// --- DEC Tests ---
+
+void test_dec() {
+    printf("\n========== DEC TESTS ==========\n");
+
+    // DEC ZP - basic decrement
+    {
+        test_reset();
+        test_header("DEC ZP - ZP[0x10]=0x42 -> 0x41");
+        bus_write(0x10, 0x42);
+        bus_write(PRG_START, OPC_DEC_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        print_program(PRG_START, 2);
+        printf(" Before:\n");
+        print_mem_range(0x10, 1);
+
+        cpu_execute(5, &cpu);
+
+        printf(" After:\n");
+        print_mem_range(0x10, 1);
+        print_flags(&cpu);
+        check("ZP[0x10] == 0x41", bus_read(0x10) == 0x41);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // DEC ZP - wrap around (0x00 -> 0xFF)
+    {
+        test_reset();
+        test_header("DEC ZP - ZP[0x20]=0x00 -> 0xFF (wrap)");
+        bus_write(0x20, 0x00);
+        bus_write(PRG_START, OPC_DEC_ZP);
+        bus_write(PRG_START + 1, 0x20);
+        print_program(PRG_START, 2);
+
+        cpu_execute(5, &cpu);
+
+        printf(" After:\n");
+        print_mem_range(0x20, 1);
+        print_flags(&cpu);
+        check("ZP[0x20] == 0xFF (wrapped)", bus_read(0x20) == 0xFF);
+        check("N == 1 (negative)", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    // DEC ZP - zero flag (0x01 -> 0x00)
+    {
+        test_reset();
+        test_header("DEC ZP - ZP[0x30]=0x01 -> 0x00 (zero flag)");
+        bus_write(0x30, 0x01);
+        bus_write(PRG_START, OPC_DEC_ZP);
+        bus_write(PRG_START + 1, 0x30);
+        print_program(PRG_START, 2);
+
+        cpu_execute(5, &cpu);
+
+        printf(" After:\n");
+        print_mem_range(0x30, 1);
+        print_flags(&cpu);
+        check("ZP[0x30] == 0x00", bus_read(0x30) == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // DEC ZPX
+    {
+        test_reset();
+        test_header("DEC ZP,X - ZP[0x10+X=0x05]=0x15, val=0x50 -> 0x4F");
+        cpu.regs.X = 0x05;
+        bus_write(0x15, 0x50);
+        bus_write(PRG_START, OPC_DEC_ZPX);
+        bus_write(PRG_START + 1, 0x10);
+        print_program(PRG_START, 2);
+
+        cpu_execute(6, &cpu);
+
+        printf(" After:\n");
+        print_mem_range(0x15, 1);
+        check("ZP[0x15] == 0x4F", bus_read(0x15) == 0x4F);
+    }
+
+    // DEC ABS
+    {
+        test_reset();
+        test_header("DEC ABS - mem[0x0300]=0x80 -> 0x7F");
+        bus_write(DATA_PAGE, 0x80);
+        bus_write(PRG_START, OPC_DEC_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(6, &cpu);
+
+        printf(" After:\n");
+        print_mem_range(DATA_PAGE, 1);
+        print_flags(&cpu);
+        check("mem[0x0300] == 0x7F", bus_read(DATA_PAGE) == 0x7F);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // DEC ABSX
+    {
+        test_reset();
+        test_header("DEC ABS,X - mem[0x0300+X=0x02]=0x0302, val=0xFF -> 0xFE");
+        cpu.regs.X = 0x02;
+        bus_write(DATA_PAGE + 0x02, 0xFF);
+        bus_write(PRG_START, OPC_DEC_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        print_program(PRG_START, 3);
+
+        cpu_execute(7, &cpu);
+
+        printf(" After:\n");
+        print_mem_range(DATA_PAGE + 0x02, 1);
+        print_flags(&cpu);
+        check("mem[0x0302] == 0xFE", bus_read(DATA_PAGE + 0x02) == 0xFE);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
+// --- DEX/DEY Tests ---
+
+void test_dex_dey() {
+    printf("\n========== DEX/DEY TESTS ==========\n");
+
+    // DEX - basic decrement
+    {
+        test_reset();
+        test_header("DEX - X=0x50 -> 0x4F");
+        cpu.regs.X = 0x50;
+        bus_write(PRG_START, OPC_DEX_IMP);
+        print_program(PRG_START, 1);
+        printf(" Before:\n");
+        print_regs(&cpu);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("X == 0x4F", cpu.regs.X == 0x4F);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // DEX - zero flag
+    {
+        test_reset();
+        test_header("DEX - X=0x01 -> 0x00 (zero flag)");
+        cpu.regs.X = 0x01;
+        bus_write(PRG_START, OPC_DEX_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("X == 0x00", cpu.regs.X == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // DEX - wrap around
+    {
+        test_reset();
+        test_header("DEX - X=0x00 -> 0xFF (wrap)");
+        cpu.regs.X = 0x00;
+        bus_write(PRG_START, OPC_DEX_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("X == 0xFF", cpu.regs.X == 0xFF);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 1 (negative)", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    // DEY - basic decrement
+    {
+        test_reset();
+        test_header("DEY - Y=0x80 -> 0x7F");
+        cpu.regs.Y = 0x80;
+        bus_write(PRG_START, OPC_DEY_IMP);
+        print_program(PRG_START, 1);
+        printf(" Before:\n");
+        print_regs(&cpu);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("Y == 0x7F", cpu.regs.Y == 0x7F);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    // DEY - zero flag
+    {
+        test_reset();
+        test_header("DEY - Y=0x01 -> 0x00 (zero flag)");
+        cpu.regs.Y = 0x01;
+        bus_write(PRG_START, OPC_DEY_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("Y == 0x00", cpu.regs.Y == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    // DEY - wrap around
+    {
+        test_reset();
+        test_header("DEY - Y=0x00 -> 0xFF (wrap)");
+        cpu.regs.Y = 0x00;
+        bus_write(PRG_START, OPC_DEY_IMP);
+        print_program(PRG_START, 1);
+
+        cpu_execute(2, &cpu);
+
+        printf(" After:\n");
+        print_regs(&cpu);
+        print_flags(&cpu);
+        check("Y == 0xFF", cpu.regs.Y == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
 // --- Menu ---
 
 void print_menu() {
@@ -1623,6 +2254,11 @@ void print_menu() {
     printf("  6. Branches (BCC/BCS/BNE/BEQ/BPL/BMI/BVC/BVS)\n");
     printf("  7. BIT (zero page and absolute)\n");
     printf("  8. BRK (implied)\n");
+    printf("  9. Clear flags (CLC/CLD/CLI/CLV)\n");
+    printf("  c. CMP (all addressing modes)\n");
+    printf("  x. CPX/CPY (compare X/Y registers)\n");
+    printf("  d. DEC (all addressing modes)\n");
+    printf("  r. DEX/DEY (decrement X/Y registers)\n");
     printf("  a. Run all tests\n");
     printf("  q. Quit\n");
     printf("Choice: ");
@@ -1687,6 +2323,26 @@ int main() {
                 test_brk();
                 print_summary();
                 break;
+            case '9':
+                test_clear_flags();
+                print_summary();
+                break;
+            case 'c':
+                test_cmp();
+                print_summary();
+                break;
+            case 'x':
+                test_cpx_cpy();
+                print_summary();
+                break;
+            case 'd':
+                test_dec();
+                print_summary();
+                break;
+            case 'r':
+                test_dex_dey();
+                print_summary();
+                break;
             case 'a':
                 test_mem_rw();
                 test_stack();
@@ -1698,6 +2354,11 @@ int main() {
                 test_branches();
                 test_bit();
                 test_brk();
+                test_clear_flags();
+                test_cmp();
+                test_cpx_cpy();
+                test_dec();
+                test_dex_dey();
                 print_summary();
                 break;
             case 'q':
