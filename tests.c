@@ -1,10 +1,14 @@
 #include <stdio.h>
+#include <string.h>     /* memset — only if not already included */
+#include <assert.h>     /* assert for tests */
 
 #include "types.h"
 #include "bus.h"
 #include "cpu.h"
 #include "memory.h"
 #include "opcodes.h"
+#include "cartridge.h"
+#include "mapper.h"
 
 // --- Test config ---
 // Program area: 0x0200-0x02FF (page 2)
@@ -1213,10 +1217,10 @@ void test_branches() {
         cpu_set_flag(N, 0, &cpu);
         bus_write(PRG_START, OPC_BPL_REL);
         bus_write(PRG_START + 1, 0xF0);  // signed: -16
-        // After fetch: PC=0x0202, +(-16) = 0x01F2
+        // After fetch: PC=0x0202, +(-16) = 0x01F2; page cross 0x02xx->0x01xx = +1 cycle
         Word expected_pc = (Word)(PRG_START + 2 + (int8_t)0xF0);
 
-        cpu_execute(3, &cpu);
+        cpu_execute(4, &cpu);  /* 2 base + 1 taken + 1 page cross */
 
         printf(" After:\n");
         print_regs(&cpu);
@@ -1420,7 +1424,7 @@ void test_brk() {
         printf("  SP=0x%02X\n", cpu.SP);
         printf("  IRQ vector -> 0x1234\n");
 
-        // After fetching opcode PC=0x0201, stack_PC = 0x0201+2 = 0x0203
+        // After fetching opcode PC=0x0201, stack_PC = 0x0201+1 = 0x0202 (skip padding byte)
         Byte flags_before = cpu.flags;
         cpu_execute(7, &cpu);
 
@@ -1432,13 +1436,13 @@ void test_brk() {
                bus_read(0x1FF), bus_read(0x1FE));
         printf("  Stack[0x1FD]=0x%02X (pushed flags)\n", bus_read(0x1FD));
 
-        // PC after fetch opcode = 0x0201; stack_PC = 0x0201 + 2 = 0x0203
+        // PC after fetch opcode = 0x0201; stack_PC = 0x0201 + 1 = 0x0202 (skip padding byte)
         Word pushed_pc = ((Word)bus_read(0x1FF) << 8) | bus_read(0x1FE);
         Byte pushed_flags = bus_read(0x1FD);
 
         check("PC == 0x1234 (IRQ vector)", cpu.PC == 0x1234);
         check("SP == 0xFC (3 bytes pushed)", cpu.SP == 0xFC);
-        check("Pushed PC == 0x0203", pushed_pc == 0x0203);
+        check("Pushed PC == 0x0202", pushed_pc == 0x0202);
         check("Pushed flags has B set (bit4)", (pushed_flags >> 4) & 1);
         check("I flag set after BRK", cpu_read_flag(I, &cpu) == 1);
         check("B flag cleared after BRK (not in cpu.flags)", cpu_read_flag(B, &cpu) == 0);
@@ -1507,12 +1511,12 @@ void test_mem_rw() {
         check("mem[0x0201] == 0x22", mem_read(0x0201) == 0x22);
     }
 
-    // High address
+    // High address - using only valid 2KB range
     {
         test_reset();
-        test_header("MEM RW - high address 0xFFF0");
-        mem_write(0xFFF0, 0x7E);
-        check("mem[0xFFF0] == 0x7E", mem_read(0xFFF0) == 0x7E);
+        test_header("MEM RW - high address within 2KB limit 0x07FF");
+        mem_write(0x07FF, 0x7E);
+        check("mem[0x07FF] == 0x7E", mem_read(0x07FF) == 0x7E);
     }
 }
 
@@ -2240,6 +2244,1399 @@ void test_dex_dey() {
     }
 }
 
+// --- ADC remaining modes ---
+
+void test_adc_modes() {
+    printf("\n========== ADC REMAINING MODES ==========\n");
+
+    {
+        test_reset();
+        test_header("ADC ZP - 0x10 + ZP[0x10]=0x20 = 0x30");
+        cpu.regs.A = 0x10;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(0x10, 0x20);
+        bus_write(PRG_START, OPC_ADC_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+
+    {
+        test_reset();
+        test_header("ADC ZPX - 0x10 + ZP[0x20+X=0x04]=0x24, val=0x20 = 0x30");
+        cpu.regs.A = 0x10;
+        cpu.regs.X = 0x04;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(0x24, 0x20);
+        bus_write(PRG_START, OPC_ADC_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+
+    {
+        test_reset();
+        test_header("ADC ABS - 0x10 + mem[0x0300]=0x20 = 0x30");
+        cpu.regs.A = 0x10;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(DATA_PAGE, 0x20);
+        bus_write(PRG_START, OPC_ADC_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+
+    {
+        test_reset();
+        test_header("ADC ABSX - 0x10 + mem[0x0300+X=0x04]=0x0304, val=0x20 = 0x30");
+        cpu.regs.A = 0x10;
+        cpu.regs.X = 0x04;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(DATA_PAGE + 0x04, 0x20);
+        bus_write(PRG_START, OPC_ADC_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+
+    {
+        test_reset();
+        test_header("ADC ABSY - 0x10 + mem[0x0300+Y=0x04]=0x0304, val=0x20 = 0x30");
+        cpu.regs.A = 0x10;
+        cpu.regs.Y = 0x04;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(DATA_PAGE + 0x04, 0x20);
+        bus_write(PRG_START, OPC_ADC_ABSY);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+
+    {
+        test_reset();
+        test_header("ADC INDX - ptr at ZP (0x20+X=0x04)=0x24 -> 0x0300, val=0x20");
+        cpu.regs.A = 0x10;
+        cpu.regs.X = 0x04;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(0x24, 0x00);
+        bus_write(0x25, 0x03);
+        bus_write(DATA_PAGE, 0x20);
+        bus_write(PRG_START, OPC_ADC_INDX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+
+    {
+        test_reset();
+        test_header("ADC INDY - ptr at ZP 0x30 -> 0x0300 + Y=0x08 -> 0x0308, val=0x20");
+        cpu.regs.A = 0x10;
+        cpu.regs.Y = 0x08;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(0x30, 0x00);
+        bus_write(0x31, 0x03);
+        bus_write(DATA_PAGE + 0x08, 0x20);
+        bus_write(PRG_START, OPC_ADC_INDY);
+        bus_write(PRG_START + 1, 0x30);
+        cpu_execute(5, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+    }
+}
+
+// --- EOR Tests ---
+
+void test_eor() {
+    printf("\n========== EOR TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("EOR IM - 0xFF ^ 0x0F = 0xF0");
+        cpu.regs.A = 0xFF;
+        bus_write(PRG_START, OPC_EOR_IM);
+        bus_write(PRG_START + 1, 0x0F);
+        cpu_execute(2, &cpu);
+        check("A == 0xF0", cpu.regs.A == 0xF0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("EOR ZP - 0x55 ^ ZP[0x10]=0x55 = 0x00 (Z=1)");
+        cpu.regs.A = 0x55;
+        bus_write(0x10, 0x55);
+        bus_write(PRG_START, OPC_EOR_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("EOR ZPX - 0x55 ^ ZP[0x20+X=0x04]=0x24, val=0x55 = 0x00");
+        cpu.regs.A = 0x55;
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x55);
+        bus_write(PRG_START, OPC_EOR_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("EOR ABS - 0x55 ^ mem[0x0300]=0x55 = 0x00");
+        cpu.regs.A = 0x55;
+        bus_write(DATA_PAGE, 0x55);
+        bus_write(PRG_START, OPC_EOR_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("EOR ABSX - 0x55 ^ mem[0x0300+X=0x04]=0x0304, val=0x55 = 0x00");
+        cpu.regs.A = 0x55;
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x55);
+        bus_write(PRG_START, OPC_EOR_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("EOR ABSY - 0x55 ^ mem[0x0300+Y=0x04]=0x0304, val=0x55 = 0x00");
+        cpu.regs.A = 0x55;
+        cpu.regs.Y = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x55);
+        bus_write(PRG_START, OPC_EOR_ABSY);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("EOR INDX - ptr at ZP (0x20+X=0x04)=0x24 -> 0x0300, val=0x55");
+        cpu.regs.A = 0x55;
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x00);
+        bus_write(0x25, 0x03);
+        bus_write(DATA_PAGE, 0x55);
+        bus_write(PRG_START, OPC_EOR_INDX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("EOR INDY - ptr at ZP 0x30 -> 0x0300 + Y=0x08 -> 0x0308, val=0x55");
+        cpu.regs.A = 0x55;
+        cpu.regs.Y = 0x08;
+        bus_write(0x30, 0x00);
+        bus_write(0x31, 0x03);
+        bus_write(DATA_PAGE + 0x08, 0x55);
+        bus_write(PRG_START, OPC_EOR_INDY);
+        bus_write(PRG_START + 1, 0x30);
+        cpu_execute(5, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+}
+
+// --- ORA Tests ---
+
+void test_ora() {
+    printf("\n========== ORA TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("ORA IM - 0x00 | 0xFF = 0xFF");
+        cpu.regs.A = 0x00;
+        bus_write(PRG_START, OPC_ORA_IM);
+        bus_write(PRG_START + 1, 0xFF);
+        cpu_execute(2, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA ZP - 0x0F | ZP[0x10]=0xF0 = 0xFF");
+        cpu.regs.A = 0x0F;
+        bus_write(0x10, 0xF0);
+        bus_write(PRG_START, OPC_ORA_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA ZPX - 0x0F | ZP[0x20+X=0x04]=0x24, val=0xF0 = 0xFF");
+        cpu.regs.A = 0x0F;
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0xF0);
+        bus_write(PRG_START, OPC_ORA_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA ABS - 0x0F | mem[0x0300]=0xF0 = 0xFF");
+        cpu.regs.A = 0x0F;
+        bus_write(DATA_PAGE, 0xF0);
+        bus_write(PRG_START, OPC_ORA_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA ABSX - 0x0F | mem[0x0300+X=0x04]=0x0304, val=0xF0 = 0xFF");
+        cpu.regs.A = 0x0F;
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0xF0);
+        bus_write(PRG_START, OPC_ORA_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA ABSY - 0x0F | mem[0x0300+Y=0x04]=0x0304, val=0xF0 = 0xFF");
+        cpu.regs.A = 0x0F;
+        cpu.regs.Y = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0xF0);
+        bus_write(PRG_START, OPC_ORA_ABSY);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA INDX - ptr at ZP (0x20+X=0x04)=0x24 -> 0x0300, val=0xF0");
+        cpu.regs.A = 0x0F;
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x00);
+        bus_write(0x25, 0x03);
+        bus_write(DATA_PAGE, 0xF0);
+        bus_write(PRG_START, OPC_ORA_INDX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ORA INDY - ptr at ZP 0x30 -> 0x0300 + Y=0x08 -> 0x0308, val=0xF0");
+        cpu.regs.A = 0x0F;
+        cpu.regs.Y = 0x08;
+        bus_write(0x30, 0x00);
+        bus_write(0x31, 0x03);
+        bus_write(DATA_PAGE + 0x08, 0xF0);
+        bus_write(PRG_START, OPC_ORA_INDY);
+        bus_write(PRG_START + 1, 0x30);
+        cpu_execute(5, &cpu);
+        check("A == 0xFF", cpu.regs.A == 0xFF);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+    }
+}
+
+// --- SBC Tests ---
+
+void test_sbc() {
+    printf("\n========== SBC TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("SBC IM - 0x50 - 0x30 = 0x20 (C=1, no borrow)");
+        cpu.regs.A = 0x50;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(PRG_START, OPC_SBC_IM);
+        bus_write(PRG_START + 1, 0x30);
+        cpu_execute(2, &cpu);
+        check("A == 0x20", cpu.regs.A == 0x20);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+        check("V == 0", cpu_read_flag(V, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("SBC ZP - 0x40 - ZP[0x10]=0x10 = 0x30");
+        cpu.regs.A = 0x40;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(0x10, 0x10);
+        bus_write(PRG_START, OPC_SBC_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC ZPX - 0x40 - ZP[0x20+X=0x04]=0x24, val=0x10 = 0x30");
+        cpu.regs.A = 0x40;
+        cpu.regs.X = 0x04;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(0x24, 0x10);
+        bus_write(PRG_START, OPC_SBC_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC ABS - 0x40 - mem[0x0300]=0x10 = 0x30");
+        cpu.regs.A = 0x40;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(DATA_PAGE, 0x10);
+        bus_write(PRG_START, OPC_SBC_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC ABSX - 0x40 - mem[0x0300+X=0x04]=0x0304, val=0x10 = 0x30");
+        cpu.regs.A = 0x40;
+        cpu.regs.X = 0x04;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(DATA_PAGE + 0x04, 0x10);
+        bus_write(PRG_START, OPC_SBC_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC ABSY - 0x40 - mem[0x0300+Y=0x04]=0x0304, val=0x10 = 0x30");
+        cpu.regs.A = 0x40;
+        cpu.regs.Y = 0x04;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(DATA_PAGE + 0x04, 0x10);
+        bus_write(PRG_START, OPC_SBC_ABSY);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC INDX - ptr at ZP (0x20+X=0x04)=0x24 -> 0x0300, val=0x10");
+        cpu.regs.A = 0x40;
+        cpu.regs.X = 0x04;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(0x24, 0x00);
+        bus_write(0x25, 0x03);
+        bus_write(DATA_PAGE, 0x10);
+        bus_write(PRG_START, OPC_SBC_INDX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC INDY - ptr at ZP 0x30 -> 0x0300 + Y=0x08 -> 0x0308, val=0x10");
+        cpu.regs.A = 0x40;
+        cpu.regs.Y = 0x08;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(0x30, 0x00);
+        bus_write(0x31, 0x03);
+        bus_write(DATA_PAGE + 0x08, 0x10);
+        bus_write(PRG_START, OPC_SBC_INDY);
+        bus_write(PRG_START + 1, 0x30);
+        cpu_execute(5, &cpu);
+        check("A == 0x30", cpu.regs.A == 0x30);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SBC IM - 0x50 - 0x50 = 0x00 (Z=1)");
+        cpu.regs.A = 0x50;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(PRG_START, OPC_SBC_IM);
+        bus_write(PRG_START + 1, 0x50);
+        cpu_execute(2, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+}
+
+// --- LDX/LDY Tests ---
+
+void test_ldx_ldy() {
+    printf("\n========== LDX/LDY TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("LDX IM - load 0x42");
+        bus_write(PRG_START, OPC_LDX_IM);
+        bus_write(PRG_START + 1, 0x42);
+        cpu_execute(2, &cpu);
+        check("X == 0x42", cpu.regs.X == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDX ZP - load from ZP 0x10");
+        bus_write(0x10, 0x42);
+        bus_write(PRG_START, OPC_LDX_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("X == 0x42", cpu.regs.X == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDX ZPY - load from ZP[0x20+Y=0x04]=0x24");
+        cpu.regs.Y = 0x04;
+        bus_write(0x24, 0x42);
+        bus_write(PRG_START, OPC_LDX_ZPY);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("X == 0x42", cpu.regs.X == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDX ABS - load from 0x0300");
+        bus_write(DATA_PAGE, 0x42);
+        bus_write(PRG_START, OPC_LDX_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("X == 0x42", cpu.regs.X == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDX ABY - load from 0x0300+Y=0x04 -> 0x0304");
+        cpu.regs.Y = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x42);
+        bus_write(PRG_START, OPC_LDX_ABY);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("X == 0x42", cpu.regs.X == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDX IM - load 0x80 (N=1)");
+        bus_write(PRG_START, OPC_LDX_IM);
+        bus_write(PRG_START + 1, 0x80);
+        cpu_execute(2, &cpu);
+        check("X == 0x80", cpu.regs.X == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("LDY IM - load 0x42");
+        bus_write(PRG_START, OPC_LDY_IM);
+        bus_write(PRG_START + 1, 0x42);
+        cpu_execute(2, &cpu);
+        check("Y == 0x42", cpu.regs.Y == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDY ZP - load from ZP 0x10");
+        bus_write(0x10, 0x42);
+        bus_write(PRG_START, OPC_LDY_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("Y == 0x42", cpu.regs.Y == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDY ZPX - load from ZP[0x20+X=0x04]=0x24");
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x42);
+        bus_write(PRG_START, OPC_LDY_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("Y == 0x42", cpu.regs.Y == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDY ABS - load from 0x0300");
+        bus_write(DATA_PAGE, 0x42);
+        bus_write(PRG_START, OPC_LDY_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("Y == 0x42", cpu.regs.Y == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDY ABX - load from 0x0300+X=0x04 -> 0x0304");
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x42);
+        bus_write(PRG_START, OPC_LDY_ABX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("Y == 0x42", cpu.regs.Y == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LDY IM - load 0x80 (N=1)");
+        bus_write(PRG_START, OPC_LDY_IM);
+        bus_write(PRG_START + 1, 0x80);
+        cpu_execute(2, &cpu);
+        check("Y == 0x80", cpu.regs.Y == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
+// --- STX/STY Tests ---
+
+void test_stx_sty() {
+    printf("\n========== STX/STY TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("STX ZP - store X=0xAB to ZP 0x10");
+        cpu.regs.X = 0xAB;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_STX_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("ZP[0x10] == 0xAB", bus_read(0x10) == 0xAB);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+
+    {
+        test_reset();
+        test_header("STX ZPY - store X=0xAB to ZP[0x20+Y=0x04]=0x24");
+        cpu.regs.X = 0xAB;
+        cpu.regs.Y = 0x04;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_STX_ZPY);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("ZP[0x24] == 0xAB", bus_read(0x24) == 0xAB);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+
+    {
+        test_reset();
+        test_header("STX ABS - store X=0xAB to 0x0300");
+        cpu.regs.X = 0xAB;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_STX_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("mem[0x0300] == 0xAB", bus_read(DATA_PAGE) == 0xAB);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+
+    {
+        test_reset();
+        test_header("STY ZP - store Y=0xAB to ZP 0x10");
+        cpu.regs.Y = 0xAB;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_STY_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(3, &cpu);
+        check("ZP[0x10] == 0xAB", bus_read(0x10) == 0xAB);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+
+    {
+        test_reset();
+        test_header("STY ZPX - store Y=0xAB to ZP[0x20+X=0x04]=0x24");
+        cpu.regs.Y = 0xAB;
+        cpu.regs.X = 0x04;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_STY_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(4, &cpu);
+        check("ZP[0x24] == 0xAB", bus_read(0x24) == 0xAB);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+
+    {
+        test_reset();
+        test_header("STY ABS - store Y=0xAB to 0x0300");
+        cpu.regs.Y = 0xAB;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_STY_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(4, &cpu);
+        check("mem[0x0300] == 0xAB", bus_read(DATA_PAGE) == 0xAB);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+}
+
+// --- LSR Tests ---
+
+void test_lsr() {
+    printf("\n========== LSR TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("LSR ACC - 0x02 >> 1 = 0x01, C=0, Z=0, N=0");
+        cpu.regs.A = 0x02;
+        bus_write(PRG_START, OPC_LSR_ACC);
+        cpu_execute(2, &cpu);
+        check("A == 0x01", cpu.regs.A == 0x01);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LSR ACC - 0x01 >> 1 = 0x00, C=1, Z=1");
+        cpu.regs.A = 0x01;
+        bus_write(PRG_START, OPC_LSR_ACC);
+        cpu_execute(2, &cpu);
+        check("A == 0x00", cpu.regs.A == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("LSR ZP - ZP[0x10]=0x80 >> 1 = 0x40, C=0");
+        bus_write(0x10, 0x80);
+        bus_write(PRG_START, OPC_LSR_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(5, &cpu);
+        check("ZP[0x10] == 0x40", bus_read(0x10) == 0x40);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LSR ZPX - ZP[0x20+X=0x04]=0x24, val=0x80 >> 1 = 0x40");
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x80);
+        bus_write(PRG_START, OPC_LSR_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("ZP[0x24] == 0x40", bus_read(0x24) == 0x40);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LSR ABS - mem[0x0300]=0x80 >> 1 = 0x40");
+        bus_write(DATA_PAGE, 0x80);
+        bus_write(PRG_START, OPC_LSR_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(6, &cpu);
+        check("mem[0x0300] == 0x40", bus_read(DATA_PAGE) == 0x40);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("LSR ABSX - mem[0x0300+X=0x04]=0x0304, val=0x80 >> 1 = 0x40");
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x80);
+        bus_write(PRG_START, OPC_LSR_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(7, &cpu);
+        check("mem[0x0304] == 0x40", bus_read(DATA_PAGE + 0x04) == 0x40);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+}
+
+// --- ROL Tests ---
+
+void test_rol() {
+    printf("\n========== ROL TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("ROL ACC - C=0: 0x40 << 1 = 0x80, C=0, N=1");
+        cpu.regs.A = 0x40;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROL_ACC);
+        cpu_execute(2, &cpu);
+        check("A == 0x80", cpu.regs.A == 0x80);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROL ACC - C=1: 0x40 << 1 | C = 0x81, C=0");
+        cpu.regs.A = 0x40;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(PRG_START, OPC_ROL_ACC);
+        cpu_execute(2, &cpu);
+        check("A == 0x81", cpu.regs.A == 0x81);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ROL ZP - ZP[0x10]=0x80, C=0 -> 0x00, C=1, Z=1");
+        bus_write(0x10, 0x80);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROL_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(5, &cpu);
+        check("ZP[0x10] == 0x00", bus_read(0x10) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROL ZPX - ZP[0x20+X=0x04]=0x24, val=0x80, C=0 -> 0x00, C=1");
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x80);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROL_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("ZP[0x24] == 0x00", bus_read(0x24) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROL ABS - mem[0x0300]=0x80, C=0 -> 0x00, C=1, Z=1");
+        bus_write(DATA_PAGE, 0x80);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROL_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(6, &cpu);
+        check("mem[0x0300] == 0x00", bus_read(DATA_PAGE) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROL ABSX - mem[0x0300+X=0x04]=0x0304, val=0x80, C=0 -> 0x00, C=1");
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x80);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROL_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(7, &cpu);
+        check("mem[0x0304] == 0x00", bus_read(DATA_PAGE + 0x04) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+}
+
+// --- ROR Tests ---
+
+void test_ror() {
+    printf("\n========== ROR TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("ROR ACC - C=0: 0x02 >> 1 = 0x01, C=0");
+        cpu.regs.A = 0x02;
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROR_ACC);
+        cpu_execute(2, &cpu);
+        check("A == 0x01", cpu.regs.A == 0x01);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("ROR ACC - C=1: 0x02 >> 1 | C<<7 = 0x81, C=0, N=1");
+        cpu.regs.A = 0x02;
+        cpu_set_flag(C, 1, &cpu);
+        bus_write(PRG_START, OPC_ROR_ACC);
+        cpu_execute(2, &cpu);
+        check("A == 0x81", cpu.regs.A == 0x81);
+        check("C == 0", cpu_read_flag(C, &cpu) == 0);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROR ZP - ZP[0x10]=0x01, C=0 -> 0x00, C=1, Z=1");
+        bus_write(0x10, 0x01);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROR_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(5, &cpu);
+        check("ZP[0x10] == 0x00", bus_read(0x10) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROR ZPX - ZP[0x20+X=0x04]=0x24, val=0x01, C=0 -> 0x00, C=1");
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x01);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROR_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("ZP[0x24] == 0x00", bus_read(0x24) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROR ABS - mem[0x0300]=0x01, C=0 -> 0x00, C=1, Z=1");
+        bus_write(DATA_PAGE, 0x01);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROR_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(6, &cpu);
+        check("mem[0x0300] == 0x00", bus_read(DATA_PAGE) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("ROR ABSX - mem[0x0300+X=0x04]=0x0304, val=0x01, C=0 -> 0x00, C=1");
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x01);
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_ROR_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(7, &cpu);
+        check("mem[0x0304] == 0x00", bus_read(DATA_PAGE + 0x04) == 0x00);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+}
+
+// --- INC/INX/INY Tests ---
+
+void test_inc_inx_iny() {
+    printf("\n========== INC/INX/INY TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("INC ZP - ZP[0x10]=0x10 -> 0x11");
+        bus_write(0x10, 0x10);
+        bus_write(PRG_START, OPC_INC_ZP);
+        bus_write(PRG_START + 1, 0x10);
+        cpu_execute(5, &cpu);
+        check("ZP[0x10] == 0x11", bus_read(0x10) == 0x11);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("INC ZP - ZP[0x20]=0xFF -> 0x00 (Z=1)");
+        bus_write(0x20, 0xFF);
+        bus_write(PRG_START, OPC_INC_ZP);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(5, &cpu);
+        check("ZP[0x20] == 0x00", bus_read(0x20) == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("INC ZPX - ZP[0x20+X=0x04]=0x24, val=0x7F -> 0x80 (N=1)");
+        cpu.regs.X = 0x04;
+        bus_write(0x24, 0x7F);
+        bus_write(PRG_START, OPC_INC_ZPX);
+        bus_write(PRG_START + 1, 0x20);
+        cpu_execute(6, &cpu);
+        check("ZP[0x24] == 0x80", bus_read(0x24) == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("INC ABS - mem[0x0300]=0x7F -> 0x80 (N=1)");
+        bus_write(DATA_PAGE, 0x7F);
+        bus_write(PRG_START, OPC_INC_ABS);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(6, &cpu);
+        check("mem[0x0300] == 0x80", bus_read(DATA_PAGE) == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("INC ABSX - mem[0x0300+X=0x04]=0x0304, val=0x7F -> 0x80 (N=1)");
+        cpu.regs.X = 0x04;
+        bus_write(DATA_PAGE + 0x04, 0x7F);
+        bus_write(PRG_START, OPC_INC_ABSX);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(7, &cpu);
+        check("mem[0x0304] == 0x80", bus_read(DATA_PAGE + 0x04) == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("INX - X=0x10 -> 0x11");
+        cpu.regs.X = 0x10;
+        bus_write(PRG_START, OPC_INX_IMP);
+        cpu_execute(2, &cpu);
+        check("X == 0x11", cpu.regs.X == 0x11);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("INX - X=0xFF -> 0x00 (Z=1)");
+        cpu.regs.X = 0xFF;
+        bus_write(PRG_START, OPC_INX_IMP);
+        cpu_execute(2, &cpu);
+        check("X == 0x00", cpu.regs.X == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("INY - Y=0x7F -> 0x80 (N=1)");
+        cpu.regs.Y = 0x7F;
+        bus_write(PRG_START, OPC_INY_IMP);
+        cpu_execute(2, &cpu);
+        check("Y == 0x80", cpu.regs.Y == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
+// --- JMP Tests ---
+
+void test_jmp() {
+    printf("\n========== JMP TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("JMP ABS - jump to 0x0250");
+        bus_write(PRG_START, OPC_JMP_ABS);
+        bus_write_word(PRG_START + 1, 0x0250);
+        cpu_execute(3, &cpu);
+        check("PC == 0x0250", cpu.PC == 0x0250);
+    }
+
+    {
+        test_reset();
+        test_header("JMP IND - ptr at DATA_PAGE -> 0x0250");
+        bus_write(DATA_PAGE, 0x50);
+        bus_write(DATA_PAGE + 1, 0x02);
+        bus_write(PRG_START, OPC_JMP_IND);
+        bus_write_word(PRG_START + 1, DATA_PAGE);
+        cpu_execute(5, &cpu);
+        check("PC == 0x0250", cpu.PC == 0x0250);
+    }
+}
+
+// --- JSR/RTS Tests ---
+
+void test_jsr_rts() {
+    printf("\n========== JSR/RTS TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("JSR ABS - jump to 0x0250, push return addr 0x0202");
+        Byte sp_before = cpu.SP;
+        bus_write(PRG_START, OPC_JSR_ABS);
+        bus_write_word(PRG_START + 1, 0x0250);
+        cpu_execute(6, &cpu);
+        Word pushed_ret = ((Word)bus_read(0x100 + sp_before) << 8) | bus_read(0x100 + (Byte)(sp_before - 1));
+        check("PC == 0x0250", cpu.PC == 0x0250);
+        check("SP decremented by 2", cpu.SP == (Byte)(sp_before - 2));
+        check("Return addr on stack == 0x0202", pushed_ret == 0x0202);
+    }
+
+    {
+        test_reset();
+        test_header("JSR then RTS - returns to PRG_START+3 = 0x0203");
+        bus_write(PRG_START, OPC_JSR_ABS);
+        bus_write_word(PRG_START + 1, 0x0250);
+        cpu_execute(6, &cpu);
+        bus_write(0x0250, OPC_RTS_IMP);
+        cpu_execute(6, &cpu);
+        check("PC == 0x0203 after RTS", cpu.PC == 0x0203);
+    }
+}
+
+// --- RTI Tests ---
+
+void test_rti() {
+    printf("\n========== RTI TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("RTI - pop flags then PC from stack");
+        Byte saved_flags = 0b00100100;
+        stack_push(0x03, &cpu);
+        stack_push(0x00, &cpu);
+        stack_push(saved_flags, &cpu);
+        bus_write(PRG_START, OPC_RTI_IMP);
+        cpu_execute(6, &cpu);
+        check("PC == 0x0300", cpu.PC == 0x0300);
+        check("U flag set", cpu_read_flag(U, &cpu) == 1);
+        check("B flag cleared", cpu_read_flag(B, &cpu) == 0);
+    }
+}
+
+// --- PHA/PHP/PLA/PLP Tests ---
+
+void test_push_pop() {
+    printf("\n========== PHA/PHP/PLA/PLP TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("PHA - push A=0xAB");
+        cpu.regs.A = 0xAB;
+        Byte sp_before = cpu.SP;
+        bus_write(PRG_START, OPC_PHA_IMP);
+        cpu_execute(3, &cpu);
+        check("Stack has 0xAB", bus_read(0x100 + sp_before) == 0xAB);
+        check("SP decremented", cpu.SP == (Byte)(sp_before - 1));
+    }
+
+    {
+        test_reset();
+        test_header("PHP - pushed byte has B=1");
+        Byte sp_before = cpu.SP;
+        bus_write(PRG_START, OPC_PHP_IMP);
+        cpu_execute(3, &cpu);
+        Byte pushed = bus_read(0x100 + sp_before);
+        check("Pushed flags has B set", (pushed >> 4) & 1);
+    }
+
+    {
+        test_reset();
+        test_header("PLA - pull 0xCD, check A and flags");
+        cpu.regs.A = 0xCD;
+        bus_write(PRG_START, OPC_PHA_IMP);
+        cpu_execute(3, &cpu);
+        cpu.regs.A = 0x00;
+        bus_write(PRG_START + 1, OPC_PLA_IMP);
+        cpu.PC = PRG_START + 1;
+        cpu_execute(4, &cpu);
+        check("A == 0xCD", cpu.regs.A == 0xCD);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 1 (bit7 set)", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("PLP - restore flags from stack");
+        bus_write(PRG_START, OPC_PHP_IMP);
+        cpu_execute(3, &cpu);
+        Byte pushed = cpu.flags | (1 << B);
+        cpu.flags = 0x00;
+        bus_write(PRG_START + 1, OPC_PLP_IMP);
+        cpu.PC = PRG_START + 1;
+        cpu_execute(4, &cpu);
+        check("U flag set after PLP", cpu_read_flag(U, &cpu) == 1);
+        check("B flag cleared after PLP", cpu_read_flag(B, &cpu) == 0);
+        (void)pushed;
+    }
+}
+
+// --- SEC/SED/SEI Tests ---
+
+void test_set_flags() {
+    printf("\n========== SET FLAG TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("SEC - C=0 -> C=1");
+        cpu_set_flag(C, 0, &cpu);
+        bus_write(PRG_START, OPC_SEC_IMP);
+        cpu_execute(2, &cpu);
+        check("C == 1", cpu_read_flag(C, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SED - D=0 -> D=1");
+        cpu_set_flag(D, 0, &cpu);
+        bus_write(PRG_START, OPC_SED_IMP);
+        cpu_execute(2, &cpu);
+        check("D == 1", cpu_read_flag(D, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("SEI - I=0 -> I=1");
+        cpu_set_flag(I, 0, &cpu);
+        bus_write(PRG_START, OPC_SEI_IMP);
+        cpu_execute(2, &cpu);
+        check("I == 1", cpu_read_flag(I, &cpu) == 1);
+    }
+}
+
+// --- Transfer Tests ---
+
+void test_transfers() {
+    printf("\n========== TRANSFER TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("TAX - A=0x42 -> X=0x42");
+        cpu.regs.A = 0x42;
+        bus_write(PRG_START, OPC_TAX_IMP);
+        cpu_execute(2, &cpu);
+        check("X == 0x42", cpu.regs.X == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("TAX - A=0x00 -> Z=1");
+        cpu.regs.A = 0x00;
+        bus_write(PRG_START, OPC_TAX_IMP);
+        cpu_execute(2, &cpu);
+        check("X == 0x00", cpu.regs.X == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("TAX - A=0x80 -> N=1");
+        cpu.regs.A = 0x80;
+        bus_write(PRG_START, OPC_TAX_IMP);
+        cpu_execute(2, &cpu);
+        check("X == 0x80", cpu.regs.X == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("TAY - A=0x42 -> Y=0x42");
+        cpu.regs.A = 0x42;
+        bus_write(PRG_START, OPC_TAY_IMP);
+        cpu_execute(2, &cpu);
+        check("Y == 0x42", cpu.regs.Y == 0x42);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("TAY - A=0x00 -> Z=1");
+        cpu.regs.A = 0x00;
+        bus_write(PRG_START, OPC_TAY_IMP);
+        cpu_execute(2, &cpu);
+        check("Y == 0x00", cpu.regs.Y == 0x00);
+        check("Z == 1", cpu_read_flag(Z, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("TAY - A=0x80 -> N=1");
+        cpu.regs.A = 0x80;
+        bus_write(PRG_START, OPC_TAY_IMP);
+        cpu_execute(2, &cpu);
+        check("Y == 0x80", cpu.regs.Y == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+
+    {
+        test_reset();
+        test_header("TXA - X=0x55 -> A=0x55");
+        cpu.regs.X = 0x55;
+        bus_write(PRG_START, OPC_TXA_IMP);
+        cpu_execute(2, &cpu);
+        check("A == 0x55", cpu.regs.A == 0x55);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("TYA - Y=0x33 -> A=0x33");
+        cpu.regs.Y = 0x33;
+        bus_write(PRG_START, OPC_TYA_IMP);
+        cpu_execute(2, &cpu);
+        check("A == 0x33", cpu.regs.A == 0x33);
+        check("Z == 0", cpu_read_flag(Z, &cpu) == 0);
+        check("N == 0", cpu_read_flag(N, &cpu) == 0);
+    }
+
+    {
+        test_reset();
+        test_header("TXS - X=0x80 -> SP=0x80, no flags changed");
+        cpu.regs.X = 0x80;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_TXS_IMP);
+        cpu_execute(2, &cpu);
+        check("SP == 0x80", cpu.SP == 0x80);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+
+    {
+        test_reset();
+        test_header("TSX - SP=0x80 -> X=0x80, N=1");
+        cpu.SP = 0x80;
+        bus_write(PRG_START, OPC_TSX_IMP);
+        cpu_execute(2, &cpu);
+        check("X == 0x80", cpu.regs.X == 0x80);
+        check("N == 1", cpu_read_flag(N, &cpu) == 1);
+    }
+}
+
+// --- NOP Tests ---
+
+void test_nop() {
+    printf("\n========== NOP TESTS ==========\n");
+
+    {
+        test_reset();
+        test_header("NOP - PC advances by 1, no state changed");
+        cpu.regs.A = 0x42;
+        cpu.regs.X = 0x10;
+        cpu.regs.Y = 0x20;
+        Byte flags_before = cpu.flags;
+        bus_write(PRG_START, OPC_NOP_IMP);
+        cpu_execute(2, &cpu);
+        check("PC == PRG_START+1", cpu.PC == PRG_START + 1);
+        check("A unchanged", cpu.regs.A == 0x42);
+        check("X unchanged", cpu.regs.X == 0x10);
+        check("Y unchanged", cpu.regs.Y == 0x20);
+        check("Flags unchanged", cpu.flags == flags_before);
+    }
+}
+
+void test_mapper0_exec() {
+    printf("\n========== MAPPER 0 (16KB) EXECUTION TEST ==========\n");
+
+    const size_t PRG_SIZE = 16 * 1024;
+    Byte prg[PRG_SIZE];
+    memset(prg, OPC_NOP_IMP, PRG_SIZE);
+
+    /* Reset vector at 0x3FFC/3FFD → CPU 0xFFFC/FFFD, pointing to 0x8010 */
+    prg[0x3FFC] = 0x10;
+    prg[0x3FFD] = 0x80;
+
+    /* Program at PRG offset 0x0010 (CPU 0x8010):
+       LDA #0x42   (2 cycles)
+       NOP         (2 cycles) */
+    prg[0x0010] = OPC_LDA_IM;
+    prg[0x0011] = 0x42;
+    prg[0x0012] = OPC_NOP_IMP;
+
+    Cartridge *cart = cartridge_create_from_buffer(prg, PRG_SIZE, NULL, 0, 0, 0);
+    assert(cart != NULL);
+    Mapper *m = mapper_create(cart);
+    assert(m != NULL);
+    bus_set_mapper(m);
+
+    CPU test_cpu;
+    cpu_reset(&test_cpu);
+    check("Reset vector: PC == 0x8010", test_cpu.PC == 0x8010);
+
+    cpu_execute(4, &test_cpu);
+    check("A == 0x42 after LDA from PRG-ROM", test_cpu.regs.A == 0x42);
+
+    bus_set_mapper(NULL);
+    mapper_destroy(m);
+    cartridge_free(cart);
+}
+
+void test_mapper0_32kb() {
+    printf("\n========== MAPPER 0 (32KB) EXECUTION TEST ==========\n");
+
+    const size_t PRG_SIZE = 32 * 1024;
+    Byte prg[PRG_SIZE];
+    memset(prg, OPC_NOP_IMP, PRG_SIZE);
+
+    /* Reset vector → 0x8100 */
+    prg[0x7FFC] = 0x00;
+    prg[0x7FFD] = 0x81;
+
+    prg[0x0100] = OPC_LDA_IM;
+    prg[0x0101] = 0x99;
+
+    Cartridge *cart = cartridge_create_from_buffer(prg, PRG_SIZE, NULL, 0, 0, 0);
+    assert(cart != NULL);
+    Mapper *m = mapper_create(cart);
+    assert(m != NULL);
+    bus_set_mapper(m);
+
+    CPU test_cpu;
+    cpu_reset(&test_cpu);
+    check("32KB reset vector: PC == 0x8100", test_cpu.PC == 0x8100);
+
+    cpu_execute(2, &test_cpu);
+    check("32KB ROM: A == 0x99", test_cpu.regs.A == 0x99);
+
+    bus_set_mapper(NULL);
+    mapper_destroy(m);
+    cartridge_free(cart);
+}
+
 // --- Menu ---
 
 void print_menu() {
@@ -2259,6 +3656,19 @@ void print_menu() {
     printf("  x. CPX/CPY (compare X/Y registers)\n");
     printf("  d. DEC (all addressing modes)\n");
     printf("  r. DEX/DEY (decrement X/Y registers)\n");
+    printf("  e. EOR/ORA (all modes)\n");
+    printf("  s. SBC (all modes)\n");
+    printf("  l. LDX/LDY (all modes)\n");
+    printf("  w. STX/STY (all modes)\n");
+    printf("  f. LSR/ROL/ROR (all modes)\n");
+    printf("  i. INC/INX/INY\n");
+    printf("  j. JMP/JSR/RTS/RTI\n");
+    printf("  p. PHA/PHP/PLA/PLP\n");
+    printf("  t. Set flags (SEC/SED/SEI)\n");
+    printf("  n. Transfers (TAX/TAY/TXA/TYA/TXS/TSX)\n");
+    printf("  z. NOP\n");
+    printf("  m. ADC (remaining modes)\n");
+    printf("  k. Mapper tests (NROM)\n");
     printf("  a. Run all tests\n");
     printf("  q. Quit\n");
     printf("Choice: ");
@@ -2343,6 +3753,64 @@ int main() {
                 test_dex_dey();
                 print_summary();
                 break;
+            case 'e':
+                test_eor();
+                test_ora();
+                print_summary();
+                break;
+            case 's':
+                test_sbc();
+                print_summary();
+                break;
+            case 'l':
+                test_ldx_ldy();
+                print_summary();
+                break;
+            case 'w':
+                test_stx_sty();
+                print_summary();
+                break;
+            case 'f':
+                test_lsr();
+                test_rol();
+                test_ror();
+                print_summary();
+                break;
+            case 'i':
+                test_inc_inx_iny();
+                print_summary();
+                break;
+            case 'j':
+                test_jmp();
+                test_jsr_rts();
+                test_rti();
+                print_summary();
+                break;
+            case 'p':
+                test_push_pop();
+                print_summary();
+                break;
+            case 't':
+                test_set_flags();
+                print_summary();
+                break;
+            case 'n':
+                test_transfers();
+                print_summary();
+                break;
+            case 'z':
+                test_nop();
+                print_summary();
+                break;
+            case 'm':
+                test_adc_modes();
+                print_summary();
+                break;
+            case 'k':
+                test_mapper0_exec();
+                test_mapper0_32kb();
+                print_summary();
+                break;
             case 'a':
                 test_mem_rw();
                 test_stack();
@@ -2359,6 +3827,25 @@ int main() {
                 test_cpx_cpy();
                 test_dec();
                 test_dex_dey();
+                test_eor();
+                test_ora();
+                test_sbc();
+                test_ldx_ldy();
+                test_stx_sty();
+                test_lsr();
+                test_rol();
+                test_ror();
+                test_inc_inx_iny();
+                test_jmp();
+                test_jsr_rts();
+                test_rti();
+                test_push_pop();
+                test_set_flags();
+                test_transfers();
+                test_nop();
+                test_adc_modes();
+                test_mapper0_exec();
+                test_mapper0_32kb();
                 print_summary();
                 break;
             case 'q':

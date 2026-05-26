@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-#define MEM_SIZE (64 * 1024)
+#define MEM_SIZE (2 * 1024)   /* 0x0800 — NES internal RAM */
 
 void mem_reset();
 
