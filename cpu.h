@@ -27,6 +27,7 @@ typedef struct {
   Regs regs;
 
   Byte flags;
+  Byte nmi_pending;   /* set by PPU; cleared by CPU after NMI handler entry */
 
   /* scratch fields used by the lookup-table dispatcher */
   Byte opcode;
@@ -44,6 +45,7 @@ void stack_push(Byte value, CPU *cpu);
 Byte stack_pop(CPU *cpu);
 
 void cpu_execute(Word cycles, CPU *cpu);
+void cpu_step(CPU *cpu);
 
 Byte cpu_read_flag(Flags flag, CPU *cpu);
 void cpu_set_flag(Flags flag, Byte value, CPU *cpu);

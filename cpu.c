@@ -45,6 +45,7 @@ void cpu_reset(CPU *cpu) {
     cpu->page_crossed = 0;
     cpu->addr_mode_id = AM_IMP;
     cpu->cycles       = 0;
+    cpu->nmi_pending  = 0;
 
     bus_reset();
 
@@ -874,14 +875,33 @@ static const Instruction INSTR_TABLE[256] = {
 /*  Dispatch loop                                                      */
 /* ------------------------------------------------------------------ */
 
+void cpu_step(CPU *cpu) {
+    cpu->opcode = fetch_program_byte(cpu);
+    const Instruction *ins = &INSTR_TABLE[cpu->opcode];
+    if (ins->op == NULL) { return; }
+    cpu->cycles = 0;
+    Byte am_extra = ins->mode(cpu);
+    Byte op_extra = ins->op(cpu);
+    cpu->cycles += ins->cycles + (am_extra & op_extra);
+
+    /* NMI check at end of cpu_step */
+    if (cpu->nmi_pending) {
+        cpu->nmi_pending = 0;
+        stack_push((cpu->PC >> 8) & 0xFF, cpu);
+        stack_push(cpu->PC & 0xFF, cpu);
+        Byte p = cpu->flags;
+        p &= ~(1 << B);
+        p |=  (1 << U);
+        stack_push(p, cpu);
+        cpu_set_flag(I, 1, cpu);
+        cpu->PC = (Word)bus_read(0xFFFA) | ((Word)bus_read(0xFFFB) << 8);
+        cpu->cycles += 7;
+    }
+}
+
 void cpu_execute(Word cycles, CPU *cpu) {
     while (cycles > 0) {
-        cpu->opcode = fetch_program_byte(cpu);
-        const Instruction *ins = &INSTR_TABLE[cpu->opcode];
-        if (ins->op == NULL) { cycles--; continue; }
-        cpu->cycles = 0;
-        Byte am_extra = ins->mode(cpu);
-        Byte op_extra = ins->op(cpu);
-        cycles -= ins->cycles + (am_extra & op_extra) + cpu->cycles;
+        cpu_step(cpu);
+        cycles -= cpu->cycles;
     }
 }

@@ -2,6 +2,7 @@
 #include "memory.h"
 
 static Mapper *active_mapper = NULL;
+static PPU *active_ppu = NULL;
 
 /* Fallback for when no mapper is connected.
    Covers only 0xFFFE–0xFFFF so the BRK test (which writes the IRQ vector
@@ -13,10 +14,15 @@ void bus_reset() {
     irq_vector_fallback[0] = 0x00;
     irq_vector_fallback[1] = 0x00;
     /* active_mapper is NOT cleared here — soft reset must keep mapper attached */
+    /* active_ppu is NOT cleared here either - same reasoning */
 }
 
 void bus_set_mapper(Mapper *m) {
     active_mapper = m;
+}
+
+void bus_connect_ppu(PPU *ppu) {
+    active_ppu = ppu;
 }
 
 Byte bus_read(Word addr) {
@@ -24,7 +30,8 @@ Byte bus_read(Word addr) {
         return mem_read(addr & 0x07FF);
     }
     if (addr <= 0x3FFF) {
-        return 0x00;   /* PPU stub */
+        if (active_ppu) return ppu_reg_read(active_ppu, addr & 0x07);
+        return 0x00;
     }
     if (addr <= 0x401F) {
         return 0x00;   /* APU/IO stub */
@@ -45,7 +52,8 @@ void bus_write(Word addr, Byte data) {
         return;
     }
     if (addr <= 0x3FFF) {
-        return;   /* PPU stub */
+        if (active_ppu) ppu_reg_write(active_ppu, addr & 0x07, data);
+        return;
     }
     if (addr <= 0x401F) {
         return;   /* APU/IO stub */

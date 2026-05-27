@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <SDL2/SDL.h>
 #include "types.h"
 #include "cpu.h"
 #include "bus.h"
 #include "cartridge.h"
 #include "mapper.h"
+#include "ppu.h"
 
 int main(int argc, char **argv) {
     CPU cpu;
@@ -21,9 +23,57 @@ int main(int argc, char **argv) {
             return 1;
         }
         bus_set_mapper(m);
+
+        /* SDL init */
+        SDL_Init(SDL_INIT_VIDEO);
+        SDL_Window *window = SDL_CreateWindow("NES", SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED, 512, 480, 0);
+        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+        SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING, 256, 240);
+
+        PPU ppu;
+        ppu_init(&ppu, m);
+        bus_connect_ppu(&ppu);
         cpu_reset(&cpu);
-        cpu_execute(30000, &cpu);
+
+        int running = 1;
+        SDL_Event event;
+        while (running) {
+            /* Poll SDL events */
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_QUIT) running = 0;
+                if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
+                    running = 0;
+            }
+
+            /* Run one full frame: 89341 or 89342 PPU dots = ~29780 CPU cycles */
+            /* 1 CPU cycle = 3 PPU dots */
+            do {
+                ppu_tick(&ppu);
+                ppu_tick(&ppu);
+                ppu_tick(&ppu);
+                if (ppu.nmi_output) {
+                    ppu.nmi_output = 0;
+                    cpu.nmi_pending = 1;
+                }
+                cpu_step(&cpu);
+            } while (!ppu_frame_complete(&ppu));
+
+            /* Blit framebuffer */
+            SDL_UpdateTexture(texture, NULL, ppu.framebuffer, 256 * sizeof(uint32_t));
+            SDL_RenderClear(renderer);
+            SDL_RenderCopy(renderer, texture, NULL, NULL);
+            SDL_RenderPresent(renderer);
+        }
+
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+
         bus_set_mapper(NULL);
+        bus_connect_ppu(NULL);
         mapper_destroy(m);
         cartridge_free(cart);
     } else {
