@@ -463,6 +463,11 @@ void ppu_tick(PPU *ppu) {
             ppu->frame_done = 1;
         }
     }
+    /* Odd-frame skip: NTSC PPU shortens odd frames by one dot when rendering is on.
+       Scanline 0, dot 0 is skipped → jump directly to dot 1. */
+    if (sl == 0 && dot == 0 && (ppu->frame & 1) && rendering) {
+        dot = 1;
+    }
     ppu->dot = dot;
     ppu->scanline = sl;
 }

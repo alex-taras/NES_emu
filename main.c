@@ -32,7 +32,8 @@ int main(int argc, char **argv) {
         SDL_Init(SDL_INIT_VIDEO);
         SDL_Window *window = SDL_CreateWindow("NES", SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED, 512, 480, 0);
-        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
+            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING, 256, 240);
 
