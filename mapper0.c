@@ -26,6 +26,11 @@ static void m0_chr_write(Mapper *m, Word addr, Byte data) {
     /* NROM CHR is ROM — writes ignored (CHR-RAM variant not handled here) */
 }
 
+static Byte m0_get_mirroring(Mapper *m) {
+    /* Mapper 0 uses static mirroring from ROM header */
+    return m->cart->mirroring;
+}
+
 static void m0_destroy(Mapper *m) {
     free(m);
 }
@@ -35,6 +40,7 @@ static const MapperOps MAPPER0_OPS = {
     .prg_write = m0_prg_write,
     .chr_read  = m0_chr_read,
     .chr_write = m0_chr_write,
+    .get_mirroring = m0_get_mirroring,
     .destroy   = m0_destroy,
 };
 

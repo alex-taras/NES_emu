@@ -11,6 +11,7 @@ typedef struct {
     void (*prg_write)(Mapper *m, Word addr, Byte data);
     Byte (*chr_read) (Mapper *m, Word addr);
     void (*chr_write)(Mapper *m, Word addr, Byte data);
+    Byte (*get_mirroring)(Mapper *m);
     void (*destroy)  (Mapper *m);
 } MapperOps;
 
@@ -38,6 +39,12 @@ static inline Byte mapper_chr_read(Mapper *m, Word addr) {
 }
 static inline void mapper_chr_write(Mapper *m, Word addr, Byte data) {
     m->ops->chr_write(m, addr, data);
+}
+static inline Byte mapper_get_mirroring(Mapper *m) {
+    if (m->ops->get_mirroring) {
+        return m->ops->get_mirroring(m);
+    }
+    return 0;  /* fallback to default */
 }
 
 #endif

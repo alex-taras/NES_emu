@@ -68,8 +68,18 @@ int main(int argc, char **argv) {
         want.callback = apu_sdl_callback;
         want.userdata = &apu;
         SDL_AudioSpec got;
-        SDL_AudioDeviceID audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0);
-        SDL_PauseAudioDevice(audio_dev, 0);
+        SDL_AudioDeviceID audio_dev = SDL_OpenAudioDevice(
+            NULL, 0, &want, &got,
+            SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_SAMPLES_CHANGE
+        );
+        if (audio_dev == 0) {
+            fprintf(stderr, "Failed to open audio device: %s\n", SDL_GetError());
+            fprintf(stderr, "Continuing without audio.\n");
+        } else {
+            fprintf(stderr, "Audio: wanted %d Hz, got %d Hz (%d samples)\n",
+                    want.freq, got.freq, got.samples);
+            SDL_PauseAudioDevice(audio_dev, 0);
+        }
 
         cpu_reset(&cpu);
 
@@ -107,6 +117,8 @@ int main(int argc, char **argv) {
             }
 
             /* Run until one full frame is complete */
+            static Word last_pc = 0;
+            static int same_pc_count = 0;
             while (!ppu_frame_complete(&ppu)) {
                 /* 1. Tick the PPU every system clock */
                 ppu_tick(&ppu);
@@ -125,6 +137,21 @@ int main(int argc, char **argv) {
                     } else if (cpu.cycles_remaining > 0) {
                         cpu.cycles_remaining--;
                     } else {
+                        /* Detect infinite loop OR rapid repeated execution */
+                        static int frame_instr_count = 0;
+                        frame_instr_count++;
+                        
+                        if (cpu.PC == last_pc) {
+                            same_pc_count++;
+                            if (same_pc_count > 10000) {
+                                fprintf(stderr, "CPU stuck at PC=0x%04X A=%02X X=%02X Y=%02X flags=%02X\n",
+                                        cpu.PC, cpu.regs.A, cpu.regs.X, cpu.regs.Y, cpu.flags);
+                                same_pc_count = 0;
+                            }
+                        } else {
+                            last_pc = cpu.PC;
+                            same_pc_count = 0;
+                        }
                         cpu_step(&cpu);
                         cpu.cycles_remaining = cpu.cycles - 1;
                     }

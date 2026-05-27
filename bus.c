@@ -6,6 +6,7 @@ static Mapper *active_mapper = NULL;
 static PPU *active_ppu = NULL;
 static Controller *ctrl1 = NULL;
 static Controller *ctrl2 = NULL;
+static APU *active_apu = NULL;
 
 /* DMA state */
 static int   dma_transfer = 0;   /* 1 = DMA in progress */
@@ -45,6 +46,10 @@ void bus_connect_controllers(Controller *c1, Controller *c2) {
     ctrl2 = c2;
 }
 
+void bus_connect_apu(APU *apu) {
+    active_apu = apu;
+}
+
 Byte bus_read(Word addr) {
     if (addr <= 0x1FFF) {
         return mem_read(addr & 0x07FF);
@@ -56,6 +61,7 @@ Byte bus_read(Word addr) {
     if (addr <= 0x401F) {
         if (addr == 0x4016) return ctrl1 ? controller_read(ctrl1) : 0x00;
         if (addr == 0x4017) return ctrl2 ? controller_read(ctrl2) : 0x00;
+        if (addr == 0x4015) return active_apu ? apu_read(active_apu, addr) : 0x00;
         return 0x00;
     }
     /* 0x4020–0xFFFF: cartridge space */
@@ -90,8 +96,17 @@ void bus_write(Word addr, Byte data) {
         if (ctrl2) controller_write(ctrl2, data); /* strobe is broadcast to both */
         return;
     }
-    if (addr <= 0x401F) {
-        return;   /* APU/IO stub */
+    if (addr >= 0x4000 && addr <= 0x4013) {
+        if (active_apu) apu_write(active_apu, addr, data);
+        return;
+    }
+    if (addr == 0x4015) {
+        if (active_apu) apu_write(active_apu, addr, data);
+        return;
+    }
+    if (addr == 0x4017) {
+        if (active_apu) apu_write(active_apu, addr, data);
+        return;
     }
     /* 0x4020–0xFFFF: cartridge space */
     if (active_mapper) {

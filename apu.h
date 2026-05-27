@@ -4,7 +4,7 @@
 #include "types.h"
 #include <stdint.h>
 
-#define APU_SAMPLE_RATE  44100
+#define APU_SAMPLE_RATE  48000
 #define APU_CPU_CLOCK    1789773   /* NTSC */
 #define APU_RING_SIZE    4096      /* must be power of 2 */
 

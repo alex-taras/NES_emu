@@ -34,7 +34,9 @@ static Byte *nt_mirror(PPU *ppu, Word addr) {
     Word offset = addr & 0x03FF;       /* byte within nametable */
 
     int phys;
-    switch (ppu->mirror) {
+    // Get mirroring mode from mapper instead of static ppu->mirror
+    Byte mirror_mode = mapper_get_mirroring(ppu->mapper);
+    switch (mirror_mode) {
         case MIRROR_HORIZONTAL: phys = (slot >= 2) ? 1 : 0;  break;
         case MIRROR_VERTICAL:   phys = slot & 1;              break;
         case MIRROR_SINGLE_A:   phys = 0;                     break;
@@ -269,6 +271,12 @@ static void compose_pixel(PPU *ppu) {
         Byte a0 = (ppu->at_shift_lo & mux) ? 1 : 0;
         Byte a1 = (ppu->at_shift_hi & mux) ? 1 : 0;
         bg_pal = (a1 << 1) | a0;
+
+        /* Left-edge clipping: suppress bg in first 8 pixels when bit 1 clear */
+        if (!(ppu->mask & 0x02) && ppu->dot <= 8) {
+            bg_pixel = 0;
+            bg_pal   = 0;
+        }
     }
 
     if (ppu->mask & 0x10) {   /* sprites enabled */
@@ -286,15 +294,25 @@ static void compose_pixel(PPU *ppu) {
                 break;
             }
         }
+
+        /* Left-edge clipping: suppress sprites in first 8 pixels when bit 2 clear */
+        if (!(ppu->mask & 0x04) && ppu->dot <= 8) {
+            sp_pixel = 0;
+        }
     }
 
     /* Sprite-0 hit */
     if (ppu->sprite_zero_on_line && ppu->sprite_zero_rendered &&
         bg_pixel != 0 && sp_pixel != 0 &&
-        (ppu->mask & 0x18) == 0x18 &&   /* both enabled */
-        ppu->dot != 256)
+        (ppu->mask & 0x18) == 0x18)   /* both bg and sprites enabled */
     {
-        ppu->status |= 0x40;
+        /* When both left-edge bits are clear, hit is suppressed for first 8 dots */
+        if (!(ppu->mask & 0x06)) {
+            if (ppu->dot >= 9)
+                ppu->status |= 0x40;
+        } else {
+            ppu->status |= 0x40;
+        }
     }
 
     /* Pixel priority */
@@ -434,7 +452,7 @@ void ppu_tick(PPU *ppu) {
 
         /* Sprite evaluation / fetch at end of visible scanline */
         if (sl < 240) {
-            if (dot == 256) evaluate_sprites(ppu);
+            if (dot == 257) evaluate_sprites(ppu);  /* after last pixel */
             if (dot == 320) fetch_sprites(ppu);
         }
     }
