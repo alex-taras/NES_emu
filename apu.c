@@ -263,8 +263,27 @@ void apu_tick(APU *apu) {
     apu->sample_acc += APU_SAMPLE_RATE;
     if (apu->sample_acc >= APU_CPU_CLOCK) {
         apu->sample_acc -= APU_CPU_CLOCK;
-        int16_t sample = mix_output(apu);
-        apu_push_sample(apu, sample);
+        float raw = (float)mix_output(apu);
+
+        /* NES analog filter chain (one-pole IIR):
+           HP ~37Hz  : capacitor on cartridge output
+           HP ~440Hz : inside APU
+           LP ~14kHz : cartridge connector RC */
+        float hp1_out = 0.99476f * (apu->filter_hp1_prev_out
+                        + raw - apu->filter_hp1_prev_in);
+        apu->filter_hp1_prev_in  = raw;
+        apu->filter_hp1_prev_out = hp1_out;
+
+        float hp2_out = 0.94156f * (apu->filter_hp2_prev_out
+                        + hp1_out - apu->filter_hp2_prev_in);
+        apu->filter_hp2_prev_in  = hp1_out;
+        apu->filter_hp2_prev_out = hp2_out;
+
+        float lp_out = apu->filter_lp_prev
+                       + 0.33333f * (hp2_out - apu->filter_lp_prev);
+        apu->filter_lp_prev = lp_out;
+
+        apu_push_sample(apu, (int16_t)lp_out);
     }
 }
 
