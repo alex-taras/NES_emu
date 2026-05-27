@@ -46,6 +46,7 @@ void cpu_reset(CPU *cpu) {
     cpu->addr_mode_id = AM_IMP;
     cpu->cycles       = 0;
     cpu->nmi_pending  = 0;
+    cpu->cycles_remaining = 0;
 
     bus_reset();
 

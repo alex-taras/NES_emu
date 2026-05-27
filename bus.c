@@ -3,13 +3,13 @@
 
 static Mapper *active_mapper = NULL;
 static PPU *active_ppu = NULL;
-static int dma_stall_cycles = 0;
 
-int bus_consume_dma_stall(void) {
-    int c = dma_stall_cycles;
-    dma_stall_cycles = 0;
-    return c;
-}
+/* DMA state */
+static int   dma_transfer = 0;   /* 1 = DMA in progress */
+static int   dma_dummy    = 1;   /* 1 = waiting for alignment cycle */
+static Byte  dma_page     = 0;   /* high byte of source address */
+static Byte  dma_addr     = 0;   /* current byte index 0–255 */
+static Byte  dma_data     = 0;   /* read buffer */
 
 /* Fallback for when no mapper is connected.
    Covers only 0xFFFE–0xFFFF so the BRK test (which writes the IRQ vector
@@ -22,6 +22,11 @@ void bus_reset() {
     irq_vector_fallback[1] = 0x00;
     /* active_mapper is NOT cleared here — soft reset must keep mapper attached */
     /* active_ppu is NOT cleared here either - same reasoning */
+    dma_transfer = 0;
+    dma_dummy    = 1;
+    dma_page     = 0;
+    dma_addr     = 0;
+    dma_data     = 0;
 }
 
 void bus_set_mapper(Mapper *m) {
@@ -64,12 +69,10 @@ void bus_write(Word addr, Byte data) {
     }
     if (addr == 0x4014) {
         /* OAM DMA: copy 256 bytes from CPU page $XX00-$XXFF to PPU OAM */
-        if (active_ppu) {
-            Word page = (Word)data << 8;
-            for (int i = 0; i < 256; i++)
-                active_ppu->oam[i] = bus_read(page + i);
-            dma_stall_cycles = 513;  /* OAM DMA stalls CPU for 513 cycles */
-        }
+        dma_page     = data;
+        dma_addr     = 0x00;
+        dma_transfer = 1;
+        dma_dummy    = 1;
         return;
     }
     if (addr <= 0x401F) {
@@ -83,4 +86,36 @@ void bus_write(Word addr, Byte data) {
     /* No mapper: IRQ vector fallback for test compatibility */
     if (addr == 0xFFFE) { irq_vector_fallback[0] = data; return; }
     if (addr == 0xFFFF) { irq_vector_fallback[1] = data; return; }
+}
+
+/* Called once per CPU-rate clock when dma_transfer is active.
+   system_clock is the global system clock counter (used for odd/even alignment).
+   Returns 1 while DMA is still in progress, 0 when complete. */
+int bus_dma_tick(uint64_t system_clock) {
+    if (dma_dummy) {
+        /* Wait for an odd CPU-rate clock to align (matches real hardware) */
+        if (system_clock % 2 == 1)
+            dma_dummy = 0;
+        return 1;
+    }
+    if (system_clock % 2 == 0) {
+        /* Even: read one byte from CPU bus */
+        dma_data = bus_read((Word)dma_page << 8 | dma_addr);
+    } else {
+        /* Odd: write it to PPU OAM */
+        if (active_ppu)
+            active_ppu->oam[dma_addr] = dma_data;
+        dma_addr++;
+        if (dma_addr == 0x00) {
+            /* All 256 bytes written — DMA complete */
+            dma_transfer = 0;
+            dma_dummy    = 1;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int bus_dma_active(void) {
+    return dma_transfer;
 }

@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <SDL2/SDL.h>
+#include <stdint.h>
 #include "types.h"
 #include "cpu.h"
 #include "bus.h"
@@ -39,27 +40,42 @@ int main(int argc, char **argv) {
 
         int running = 1;
         SDL_Event event;
+
+        /* New tick-loop architecture */
+        uint64_t system_clock = 0;
+
         while (running) {
-            /* Poll SDL events */
+            /* SDL event polling */
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) running = 0;
-                if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
-                    running = 0;
+                if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = 0;
             }
 
-            /* Run one full frame: ~89341 PPU dots = ~29780 CPU cycles */
-            /* 1 CPU cycle = 3 PPU dots; tick PPU cpu.cycles*3 times per instruction */
-            do {
-                cpu_step(&cpu);
-                int ticks = (cpu.cycles + bus_consume_dma_stall()) * 3;
-                for (int i = 0; i < ticks; i++) {
-                    ppu_tick(&ppu);
-                    if (ppu.nmi_output) {
-                        ppu.nmi_output = 0;
-                        cpu.nmi_pending = 1;
+            /* Run until one full frame is complete */
+            while (!ppu_frame_complete(&ppu)) {
+                /* 1. Tick the PPU every system clock */
+                ppu_tick(&ppu);
+
+                /* 2. NMI propagation — check after every PPU dot */
+                if (ppu.nmi_output) {
+                    ppu.nmi_output  = 0;
+                    cpu.nmi_pending = 1;
+                }
+
+                /* 3. CPU/DMA runs at 1/3 the rate */
+                if (system_clock % 3 == 0) {
+                    if (bus_dma_active()) {
+                        bus_dma_tick(system_clock);
+                    } else if (cpu.cycles_remaining > 0) {
+                        cpu.cycles_remaining--;
+                    } else {
+                        cpu_step(&cpu);
+                        cpu.cycles_remaining = cpu.cycles - 1;
                     }
                 }
-            } while (!ppu_frame_complete(&ppu));
+
+                system_clock++;
+            }
 
             /* Blit framebuffer */
             SDL_UpdateTexture(texture, NULL, ppu.framebuffer, 256 * sizeof(uint32_t));
