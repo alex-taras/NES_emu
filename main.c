@@ -8,6 +8,17 @@
 #include "mapper.h"
 #include "ppu.h"
 #include "controller.h"
+#include "apu.h"
+
+/* SDL audio callback */
+static void apu_sdl_callback(void *userdata, Uint8 *stream, int len) {
+    APU *apu = (APU *)userdata;
+    int n = len / sizeof(int16_t);
+    int16_t *out = (int16_t *)stream;
+    for (int i = 0; i < n; i++) {
+        out[i] = apu_pop_sample(apu);
+    }
+}
 
 int main(int argc, char **argv) {
     CPU cpu;
@@ -29,7 +40,7 @@ int main(int argc, char **argv) {
         bus_set_mapper(m);
 
         /* SDL init */
-        SDL_Init(SDL_INIT_VIDEO);
+        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
         SDL_Window *window = SDL_CreateWindow("NES", SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED, 512, 480, 0);
         SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
@@ -41,6 +52,25 @@ int main(int argc, char **argv) {
         ppu_init(&ppu, m);
         bus_connect_ppu(&ppu);
         bus_connect_controllers(&ctrl1, NULL); /* controller 2 not wired */
+
+        /* Initialize APU */
+        APU apu;
+        apu_init(&apu);
+        apu_reset(&apu);
+        bus_connect_apu(&apu);
+
+        /* Setup SDL audio */
+        SDL_AudioSpec want = {0};
+        want.freq     = APU_SAMPLE_RATE;
+        want.format   = AUDIO_S16SYS;
+        want.channels = 1;
+        want.samples  = 512;
+        want.callback = apu_sdl_callback;
+        want.userdata = &apu;
+        SDL_AudioSpec got;
+        SDL_AudioDeviceID audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0);
+        SDL_PauseAudioDevice(audio_dev, 0);
+
         cpu_reset(&cpu);
 
         int running = 1;
@@ -87,8 +117,9 @@ int main(int argc, char **argv) {
                     cpu.nmi_pending = 1;
                 }
 
-                /* 3. CPU/DMA runs at 1/3 the rate */
+                /* 3. CPU/DMA and APU run at 1/3 the rate */
                 if (system_clock % 3 == 0) {
+                    apu_tick(&apu);  /* APU always ticks at CPU rate, even during DMA */
                     if (bus_dma_active()) {
                         bus_dma_tick(system_clock);
                     } else if (cpu.cycles_remaining > 0) {
@@ -119,6 +150,7 @@ int main(int argc, char **argv) {
         SDL_DestroyTexture(texture);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
+        SDL_CloseAudioDevice(audio_dev);
         SDL_Quit();
 
         bus_set_mapper(NULL);
