@@ -7,9 +7,12 @@
 #include "cartridge.h"
 #include "mapper.h"
 #include "ppu.h"
+#include "controller.h"
 
 int main(int argc, char **argv) {
     CPU cpu;
+    Controller ctrl1;
+    controller_reset(&ctrl1);
 
     if (argc >= 2) {
         Cartridge *cart = cartridge_load(argv[1]);
@@ -36,6 +39,7 @@ int main(int argc, char **argv) {
         PPU ppu;
         ppu_init(&ppu, m);
         bus_connect_ppu(&ppu);
+        bus_connect_controllers(&ctrl1, NULL); /* controller 2 not wired */
         cpu_reset(&cpu);
 
         int running = 1;
@@ -49,6 +53,21 @@ int main(int argc, char **argv) {
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) running = 0;
                 if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = 0;
+            }
+
+            /* Build button state from current keyboard snapshot */
+            {
+                const Uint8 *keys = SDL_GetKeyboardState(NULL);
+                uint8_t buttons = 0;
+                if (keys[SDL_SCANCODE_Q])     buttons |= BTN_A;
+                if (keys[SDL_SCANCODE_W])     buttons |= BTN_B;
+                if (keys[SDL_SCANCODE_T])     buttons |= BTN_SELECT;
+                if (keys[SDL_SCANCODE_S])     buttons |= BTN_START;
+                if (keys[SDL_SCANCODE_UP])    buttons |= BTN_UP;
+                if (keys[SDL_SCANCODE_DOWN])  buttons |= BTN_DOWN;
+                if (keys[SDL_SCANCODE_LEFT])  buttons |= BTN_LEFT;
+                if (keys[SDL_SCANCODE_RIGHT]) buttons |= BTN_RIGHT;
+                controller_set_state(&ctrl1, buttons);
             }
 
             /* Run until one full frame is complete */

@@ -1,8 +1,11 @@
 #include "bus.h"
 #include "memory.h"
+#include "controller.h"
 
 static Mapper *active_mapper = NULL;
 static PPU *active_ppu = NULL;
+static Controller *ctrl1 = NULL;
+static Controller *ctrl2 = NULL;
 
 /* DMA state */
 static int   dma_transfer = 0;   /* 1 = DMA in progress */
@@ -37,6 +40,11 @@ void bus_connect_ppu(PPU *ppu) {
     active_ppu = ppu;
 }
 
+void bus_connect_controllers(Controller *c1, Controller *c2) {
+    ctrl1 = c1;
+    ctrl2 = c2;
+}
+
 Byte bus_read(Word addr) {
     if (addr <= 0x1FFF) {
         return mem_read(addr & 0x07FF);
@@ -46,7 +54,9 @@ Byte bus_read(Word addr) {
         return 0x00;
     }
     if (addr <= 0x401F) {
-        return 0x00;   /* APU/IO stub */
+        if (addr == 0x4016) return ctrl1 ? controller_read(ctrl1) : 0x00;
+        if (addr == 0x4017) return ctrl2 ? controller_read(ctrl2) : 0x00;
+        return 0x00;
     }
     /* 0x4020–0xFFFF: cartridge space */
     if (active_mapper) {
@@ -73,6 +83,11 @@ void bus_write(Word addr, Byte data) {
         dma_addr     = 0x00;
         dma_transfer = 1;
         dma_dummy    = 1;
+        return;
+    }
+    if (addr == 0x4016) {
+        if (ctrl1) controller_write(ctrl1, data);
+        if (ctrl2) controller_write(ctrl2, data); /* strobe is broadcast to both */
         return;
     }
     if (addr <= 0x401F) {
