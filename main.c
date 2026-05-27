@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
         SDL_Window *window = SDL_CreateWindow("NES", SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED, 512, 480, 0);
         SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
-            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+            SDL_RENDERER_ACCELERATED);
         SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING, 256, 240);
 
@@ -46,10 +46,15 @@ int main(int argc, char **argv) {
         int running = 1;
         SDL_Event event;
 
+        /* NES NTSC: 60.0988 Hz → ~16639 µs per frame */
+        const Uint64 FRAME_TICKS_US = 16639;
+        Uint64 perf_freq = SDL_GetPerformanceFrequency();
+
         /* New tick-loop architecture */
         uint64_t system_clock = 0;
 
         while (running) {
+            Uint64 frame_start = SDL_GetPerformanceCounter();
             /* SDL event polling */
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) running = 0;
@@ -102,6 +107,13 @@ int main(int argc, char **argv) {
             SDL_RenderClear(renderer);
             SDL_RenderCopy(renderer, texture, NULL, NULL);
             SDL_RenderPresent(renderer);
+
+            /* Throttle to NES frame rate */
+            Uint64 frame_end = SDL_GetPerformanceCounter();
+            Uint64 elapsed_us = (frame_end - frame_start) * 1000000 / perf_freq;
+            if (elapsed_us < FRAME_TICKS_US) {
+                SDL_Delay((Uint32)((FRAME_TICKS_US - elapsed_us) / 1000));
+            }
         }
 
         SDL_DestroyTexture(texture);
