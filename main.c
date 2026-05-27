@@ -47,17 +47,18 @@ int main(int argc, char **argv) {
                     running = 0;
             }
 
-            /* Run one full frame: 89341 or 89342 PPU dots = ~29780 CPU cycles */
-            /* 1 CPU cycle = 3 PPU dots */
+            /* Run one full frame: ~89341 PPU dots = ~29780 CPU cycles */
+            /* 1 CPU cycle = 3 PPU dots; tick PPU cpu.cycles*3 times per instruction */
             do {
-                ppu_tick(&ppu);
-                ppu_tick(&ppu);
-                ppu_tick(&ppu);
-                if (ppu.nmi_output) {
-                    ppu.nmi_output = 0;
-                    cpu.nmi_pending = 1;
-                }
                 cpu_step(&cpu);
+                int ticks = (cpu.cycles + bus_consume_dma_stall()) * 3;
+                for (int i = 0; i < ticks; i++) {
+                    ppu_tick(&ppu);
+                    if (ppu.nmi_output) {
+                        ppu.nmi_output = 0;
+                        cpu.nmi_pending = 1;
+                    }
+                }
             } while (!ppu_frame_complete(&ppu));
 
             /* Blit framebuffer */

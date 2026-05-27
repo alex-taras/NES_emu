@@ -50,8 +50,8 @@ typedef struct {
     Word bg_shift_hi;
 
     /* Attribute shift registers and latches */
-    Byte at_shift_lo;
-    Byte at_shift_hi;
+    Word at_shift_lo;
+    Word at_shift_hi;
     Byte at_latch_lo;   /* loaded into at_shift at tile boundary */
     Byte at_latch_hi;
 

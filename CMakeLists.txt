@@ -25,3 +25,16 @@ add_executable(6502_tests
     ${MAPPER_SOURCES} ${PPU_SOURCES}
 )
 # 6502_tests does NOT link SDL2
+
+# PPU visual test targets — build & launch a test ROM
+add_custom_target(ppu_test_color
+    COMMAND $<TARGET_FILE:6502_emu> ${CMAKE_SOURCE_DIR}/roms/color_test.nes
+    DEPENDS 6502_emu
+    COMMENT "PPU color test"
+)
+
+add_custom_target(ppu_test_palette
+    COMMAND $<TARGET_FILE:6502_emu> ${CMAKE_SOURCE_DIR}/roms/full_nes_palette.nes
+    DEPENDS 6502_emu
+    COMMENT "PPU full palette test"
+)

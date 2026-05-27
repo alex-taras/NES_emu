@@ -210,6 +210,8 @@ static void load_bg_shifters(PPU *ppu) {
     ppu->bg_shift_hi = (ppu->bg_shift_hi & 0xFF00) | ppu->bg_hi_latch;
     ppu->at_latch_lo = (ppu->at_latch & 1) ? 0xFF : 0x00;
     ppu->at_latch_hi = (ppu->at_latch & 2) ? 0xFF : 0x00;
+    ppu->at_shift_lo = (ppu->at_shift_lo & 0xFF00) | ppu->at_latch_lo;
+    ppu->at_shift_hi = (ppu->at_shift_hi & 0xFF00) | ppu->at_latch_hi;
 }
 
 static void shift_bg(PPU *ppu) {
@@ -322,8 +324,8 @@ static void evaluate_sprites(PPU *ppu) {
     int height = (ppu->ctrl & 0x20) ? 16 : 8;
 
     for (int i = 0; i < 64; i++) {
-        int y = (int)ppu->oam[i * 4] - 1;   /* Y is stored +1 */
-        int diff = ppu->scanline - y;
+        int y = (int)ppu->oam[i * 4];   /* Y position (sprite drawn on scanlines y+1..y+height) */
+        int diff = ppu->scanline - y;    /* evaluate at scanline N → renders on N+1 */
         if (diff >= 0 && diff < height) {
             if (ppu->sprite_count < 8) {
                 memcpy(&ppu->secondary_oam[ppu->sprite_count * 4], &ppu->oam[i * 4], 4);
@@ -346,7 +348,7 @@ static void fetch_sprites(PPU *ppu) {
         Byte attr   = ppu->secondary_oam[i * 4 + 2];
         Byte x_pos  = ppu->secondary_oam[i * 4 + 3];
 
-        int row = ppu->scanline - (int)y_pos;
+        int row = ppu->scanline - (int)y_pos;   /* render target = scanline+1, sprite top = y_pos+1 */
         int flip_v = attr & 0x80;
         if (flip_v) row = (height - 1) - row;
 
@@ -400,11 +402,11 @@ void ppu_tick(PPU *ppu) {
     /* ── Visible scanlines (0–239) ── */
     if (sl <= 239 || sl == 261) {
         /* Shift registers (dots 2–257, 322–337) */
-        if ((dot >= 2 && dot <= 257) || (dot >= 322 && dot <= 337)) {
+        if ((dot >= 2 && dot <= 257) || (dot >= 321 && dot <= 337)) {
             shift_bg(ppu);
 
-            /* Sprite X counters */
-            if (sl < 240) {
+            /* Sprite X counters/shifters only during visible pixel output */
+            if (sl < 240 && dot <= 257) {
                 for (int i = 0; i < ppu->sprite_count; i++) {
                     if (ppu->sprite_x[i] > 0) {
                         ppu->sprite_x[i]--;
@@ -452,10 +454,6 @@ void ppu_tick(PPU *ppu) {
 
     /* ── Advance dot/scanline ── */
     dot++;
-    if (sl == 261 && dot == 340 && rendering && (ppu->frame & 1)) {
-        /* Odd frame: skip last dot of pre-render */
-        dot++;
-    }
     if (dot > 340) {
         dot = 0;
         sl++;

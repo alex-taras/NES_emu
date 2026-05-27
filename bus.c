@@ -3,6 +3,13 @@
 
 static Mapper *active_mapper = NULL;
 static PPU *active_ppu = NULL;
+static int dma_stall_cycles = 0;
+
+int bus_consume_dma_stall(void) {
+    int c = dma_stall_cycles;
+    dma_stall_cycles = 0;
+    return c;
+}
 
 /* Fallback for when no mapper is connected.
    Covers only 0xFFFE–0xFFFF so the BRK test (which writes the IRQ vector
@@ -53,6 +60,16 @@ void bus_write(Word addr, Byte data) {
     }
     if (addr <= 0x3FFF) {
         if (active_ppu) ppu_reg_write(active_ppu, addr & 0x07, data);
+        return;
+    }
+    if (addr == 0x4014) {
+        /* OAM DMA: copy 256 bytes from CPU page $XX00-$XXFF to PPU OAM */
+        if (active_ppu) {
+            Word page = (Word)data << 8;
+            for (int i = 0; i < 256; i++)
+                active_ppu->oam[i] = bus_read(page + i);
+            dma_stall_cycles = 513;  /* OAM DMA stalls CPU for 513 cycles */
+        }
         return;
     }
     if (addr <= 0x401F) {
