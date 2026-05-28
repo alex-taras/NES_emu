@@ -20,7 +20,7 @@
 #define OPC_AND_INDY    0x31
 
 #define OPC_ASL_ACC     0x0A
-#define OPC_ASL_ZP      0x1A
+#define OPC_ASL_ZP      0x06
 #define OPC_ASL_ZPX     0x16
 #define OPC_ASL_ABS     0x0E
 #define OPC_ASL_ABSX    0x1E

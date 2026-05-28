@@ -79,6 +79,10 @@ typedef struct {
 
     /* Internal flag: frame just completed (cleared after ppu_frame_complete) */
     Byte frame_done;
+
+    /* Debug: count scanlines where sprite 0 was found this frame */
+    int dbg_sp0_eval_count;
+    int dbg_sp0_hit_count;
 } PPU;
 
 /* Lifecycle */

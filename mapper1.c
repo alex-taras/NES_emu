@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "mapper1.h"
 
 // The Mapper1 state struct that will be allocated as part of a larger structure
@@ -36,6 +37,25 @@ typedef struct {
 static void m1_write_register(Mapper1 *m, Word addr, Byte data);
 static void m1_update_banks(Mapper1 *m);
 static void m1_set_control(Mapper1 *m, Byte value);
+static int m1_trace_enabled = 0;
+
+static int m1_trace_count = 0;
+static void m1_trace_state(Mapper1 *m, const char *event, Word addr, Byte data, Byte target) {
+    if (!m1_trace_enabled) return;
+    if (m1_trace_count >= 1024) return;
+    /* PRG-bank commits are extremely frequent in LoZ; sample them sparsely. */
+    if (target == 3 && (m1_trace_count % 64) != 0) {
+        m1_trace_count++;
+        return;
+    }
+    fprintf(stderr,
+            "MMC1[%03d] %s tgt=%u addr=%04X data=%02X | ctrl=%02X mir=%u chr0=%02X chr1=%02X prg=%02X | prg_off=%05X/%05X chr_off=%05X/%05X\n",
+            m1_trace_count, event, target, addr, data,
+            m->control, m->mirroring, m->chr_bank_0, m->chr_bank_1, m->prg_bank,
+            (unsigned)m->prg_bank_0_offset, (unsigned)m->prg_bank_1_offset,
+            (unsigned)m->chr_bank_0_offset, (unsigned)m->chr_bank_1_offset);
+    m1_trace_count++;
+}
 
 // PRG read: 16KB/32KB banking + PRG RAM
 static Byte m1_prg_read(Mapper *m, Word addr) {
@@ -120,9 +140,10 @@ static void m1_write_register(Mapper1 *m, Word addr, Byte data) {
     if (data & 0x80) {
         m->shift_register = 0;
         m->shift_count = 0;
-        // Reset control register to 0x1C (like reference)
+        // Reset forces PRG mode to 3 (fix last bank at $C000).
         m->control |= 0x0C;
         m1_update_banks(m);
+        m1_trace_state(m, "reset", addr, data, 0xFF);
         return;
     }
 
@@ -155,6 +176,7 @@ static void m1_write_register(Mapper1 *m, Word addr, Byte data) {
         m->shift_register = 0;
         m->shift_count = 0;
         m1_update_banks(m);
+        m1_trace_state(m, "commit", addr, reg_value, target);
     }
 }
 
@@ -198,13 +220,13 @@ static void m1_update_banks(Mapper1 *m) {
     Byte chr_mode = (m->control >> 4) & 0x01;
     
     if (chr_mode) {
-        // 4KB mode
+        // 4KB mode: each register selects a 4KB bank
         m->chr_bank_0_offset = m->chr_bank_0 * 0x1000;
         m->chr_bank_1_offset = m->chr_bank_1 * 0x1000;
     } else {
-        // 8KB mode: chr_bank_0 holds the 4KB-page index (bit 0 cleared).
-        // The two 4KB halves are consecutive pages of the same 8KB block.
-        m->chr_bank_0_offset = m->chr_bank_0 * 0x1000;
+        // 8KB mode: register value uses 4KB units with bit 0 forced to 0.
+        // So byte offset uses 0x1000 scaling, then second half is +0x1000.
+        m->chr_bank_0_offset = (DWord)m->chr_bank_0 * 0x1000;
         m->chr_bank_1_offset = m->chr_bank_0_offset + 0x1000;
     }
 }
@@ -243,17 +265,20 @@ Mapper *mapper1_create(Cartridge *cart) {
     m1->base.ops = &MAPPER1_OPS;
     m1->base.cart = cart;
 
-    // Initial state: control = 0x0C (PRG mode 3, CHR 4KB, vertical mirror)
+    // Initial state: control = 0x1C (PRG mode 3, CHR 4KB, one-screen-low)
     m1->control = 0x1C;  // Reference uses 0x1C on reset
     m1->shift_register = 0;
     m1->shift_count = 0;
     m1->chr_bank_0 = 0;
     m1->chr_bank_1 = 0;
     m1->prg_bank = 0;
-    m1->mirroring = 0;  // control=0x1C bits 1:0=0 → one-screen-low
+    // Keep mirrored mode in sync with control register low bits.
+    m1->mirroring = m1->control & 0x03;
 
     // Calculate initial banks
     m1_update_banks(m1);
+    m1_trace_count = 0;
+    m1_trace_enabled = 0;
 
     return (Mapper*)m1;
 }

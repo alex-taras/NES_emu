@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdio.h>
 
 #include "cpu.h"
 
@@ -31,7 +32,8 @@ typedef enum {
 /* ------------------------------------------------------------------ */
 
 void cpu_reset(CPU *cpu) {
-    cpu->SP = 0xFF;
+    /* NES reset leaves SP at FD */
+    cpu->SP = 0xFD;
 
     cpu->regs.A = 0x00;
     cpu->regs.X = 0x00;
@@ -685,7 +687,7 @@ static const Instruction INSTR_TABLE[256] = {
     [OPC_BNE_REL]   = { "BNE", op_BNE, am_REL, 2 },
     [OPC_BEQ_REL]   = { "BEQ", op_BEQ, am_REL, 2 },
 
-    /* ASL -- note OPC_ASL_ZP = 0x1A per opcodes.h */
+    /* ASL */
     [OPC_ASL_ACC]   = { "ASL", op_ASL, am_ACC, 2 },
     [OPC_ASL_ZP]    = { "ASL", op_ASL, am_ZP0, 5 },
     [OPC_ASL_ZPX]   = { "ASL", op_ASL, am_ZPX, 6 },
@@ -877,9 +879,46 @@ static const Instruction INSTR_TABLE[256] = {
 /* ------------------------------------------------------------------ */
 
 void cpu_step(CPU *cpu) {
+    static uint64_t instruction_id = 0;
+    static Word pc_ring[32];
+    static Byte op_ring[32];
+    static int ring_idx = 0;
+    static int trap_fff0_logged = 0;
+
+    if (cpu->PC == 0xFFF0 && !trap_fff0_logged) {
+        fprintf(stderr,
+                "CPU_TRAP_FFF0: A=%02X X=%02X Y=%02X P=%02X SP=%02X | stack_top=%02X %02X %02X %02X %02X %02X\n",
+                cpu->regs.A, cpu->regs.X, cpu->regs.Y, cpu->flags, cpu->SP,
+                bus_read(0x0100 + ((cpu->SP + 1) & 0xFF)),
+                bus_read(0x0100 + ((cpu->SP + 2) & 0xFF)),
+                bus_read(0x0100 + ((cpu->SP + 3) & 0xFF)),
+                bus_read(0x0100 + ((cpu->SP + 4) & 0xFF)),
+                bus_read(0x0100 + ((cpu->SP + 5) & 0xFF)),
+                bus_read(0x0100 + ((cpu->SP + 6) & 0xFF)));
+        fprintf(stderr, "  Recent flow:\n");
+        for (int i = 0; i < 32; i++) {
+            int ri = (ring_idx + i) & 31;
+            fprintf(stderr, "    PC=%04X OP=%02X\n", pc_ring[ri], op_ring[ri]);
+        }
+        trap_fff0_logged = 1;
+    }
+
+    pc_ring[ring_idx & 31] = cpu->PC;
+    op_ring[ring_idx & 31] = bus_read(cpu->PC);
+    ring_idx++;
+
+    bus_set_cpu_instruction_id(++instruction_id);
     cpu->opcode = fetch_program_byte(cpu);
     const Instruction *ins = &INSTR_TABLE[cpu->opcode];
-    if (ins->op == NULL) { return; }
+    if (ins->op == NULL) {
+        Word bad_pc = (Word)(cpu->PC - 1);
+        if (bad_pc != 0xFFF0) {
+            fprintf(stderr, "CPU_UNKNOWN_OPCODE: PC=%04X opcode=%02X A=%02X X=%02X Y=%02X P=%02X SP=%02X\n",
+                    bad_pc, cpu->opcode, cpu->regs.A, cpu->regs.X, cpu->regs.Y, cpu->flags, cpu->SP);
+        }
+        cpu->cycles = 2; /* avoid zero-cycle stalls while diagnosing */
+        return;
+    }
     cpu->cycles = 0;
     Byte am_extra = ins->mode(cpu);
     Byte op_extra = ins->op(cpu);

@@ -417,12 +417,15 @@ void apu_write(APU *apu, uint16_t addr, uint8_t data) {
 
 uint8_t apu_read(APU *apu, uint16_t addr) {
     switch (addr) {
-        case 0x4015:
-            return ((apu->pulse[0].length > 0) ? 1 : 0) |
+        case 0x4015: {
+            uint8_t val = ((apu->pulse[0].length > 0) ? 1 : 0) |
                    ((apu->pulse[1].length > 0) ? 2 : 0) |
                    ((apu->triangle.length > 0) ? 4 : 0) |
                    ((apu->noise.length > 0) ? 8 : 0) |
                    ((apu->fc.irq_flag) ? 0x40 : 0);
+            apu->fc.irq_flag = 0;  /* Reading $4015 clears frame IRQ flag */
+            return val;
+        }
         default:
             return 0;
     }

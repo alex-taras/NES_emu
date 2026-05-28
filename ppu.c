@@ -304,14 +304,18 @@ static void compose_pixel(PPU *ppu) {
     /* Sprite-0 hit */
     if (ppu->sprite_zero_on_line && ppu->sprite_zero_rendered &&
         bg_pixel != 0 && sp_pixel != 0 &&
-        (ppu->mask & 0x18) == 0x18)   /* both bg and sprites enabled */
+        (ppu->mask & 0x18) == 0x18 &&   /* both bg and sprites enabled */
+        ppu->dot < 258)                  /* hit cannot occur at dot 258+ */
     {
         /* When both left-edge bits are clear, hit is suppressed for first 8 dots */
         if (!(ppu->mask & 0x06)) {
-            if (ppu->dot >= 9)
+            if (ppu->dot >= 9) {
                 ppu->status |= 0x40;
+                ppu->dbg_sp0_hit_count++;
+            }
         } else {
             ppu->status |= 0x40;
+            ppu->dbg_sp0_hit_count++;
         }
     }
 
@@ -347,7 +351,7 @@ static void evaluate_sprites(PPU *ppu) {
         if (diff >= 0 && diff < height) {
             if (ppu->sprite_count < 8) {
                 memcpy(&ppu->secondary_oam[ppu->sprite_count * 4], &ppu->oam[i * 4], 4);
-                if (i == 0) ppu->sprite_zero_on_line = 1;
+                if (i == 0) { ppu->sprite_zero_on_line = 1; ppu->dbg_sp0_eval_count++; }
                 ppu->sprite_count++;
             } else {
                 ppu->status |= 0x20;   /* sprite overflow */
@@ -411,6 +415,8 @@ void ppu_tick(PPU *ppu) {
             ppu->status &= ~0xE0;   /* clear vblank, sprite-0, overflow */
             memset(ppu->sprite_shift_lo, 0, 8);
             memset(ppu->sprite_shift_hi, 0, 8);
+            ppu->dbg_sp0_eval_count = 0;
+            ppu->dbg_sp0_hit_count = 0;
         }
         if (rendering && dot >= 280 && dot <= 304) {
             copy_vertical(ppu);

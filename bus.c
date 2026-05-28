@@ -1,6 +1,7 @@
 #include "bus.h"
 #include "memory.h"
 #include "controller.h"
+#include <stdio.h>
 
 static Mapper *active_mapper = NULL;
 static PPU *active_ppu = NULL;
@@ -19,6 +20,32 @@ static Byte  dma_data     = 0;   /* read buffer */
    Covers only 0xFFFE–0xFFFF so the BRK test (which writes the IRQ vector
    directly via bus_write) still works without a cartridge. */
 static Byte irq_vector_fallback[2];
+static BusDebugStats debug_stats;
+static uint64_t current_instruction_id = 0;
+static uint64_t last_mmc1_write_instruction_id = UINT64_MAX;
+
+void bus_reset_debug_stats(void) {
+    debug_stats.ppustatus_reads = 0;
+    debug_stats.ppustatus_vblank_set_reads = 0;
+    debug_stats.ppustatus_sprite0_set_reads = 0;
+    debug_stats.last_ppustatus_value = 0;
+    debug_stats.ppuscroll_writes = 0;
+    debug_stats.ppuaddr_writes = 0;
+    debug_stats.ppudata_writes = 0;
+    debug_stats.oamaddr_writes = 0;
+    debug_stats.last_oamaddr_value = 0;
+    debug_stats.oamdata_writes = 0;
+    debug_stats.oamdma_starts = 0;
+    debug_stats.last_oamdma_page = 0;
+}
+
+void bus_get_debug_stats(BusDebugStats *out_stats) {
+    if (out_stats) *out_stats = debug_stats;
+}
+
+void bus_set_cpu_instruction_id(uint64_t instruction_id) {
+    current_instruction_id = instruction_id;
+}
 
 void bus_reset() {
     mem_reset();
@@ -31,6 +58,9 @@ void bus_reset() {
     dma_page     = 0;
     dma_addr     = 0;
     dma_data     = 0;
+    current_instruction_id = 0;
+    last_mmc1_write_instruction_id = UINT64_MAX;
+    bus_reset_debug_stats();
 }
 
 void bus_set_mapper(Mapper *m) {
@@ -55,7 +85,31 @@ Byte bus_read(Word addr) {
         return mem_read(addr & 0x07FF);
     }
     if (addr <= 0x3FFF) {
-        if (active_ppu) return ppu_reg_read(active_ppu, addr & 0x07);
+        if (active_ppu) {
+            Byte reg = addr & 0x07;
+            Byte val = ppu_reg_read(active_ppu, reg);
+            if (reg == 0x02) {
+                debug_stats.ppustatus_reads++;
+                debug_stats.last_ppustatus_value = val;
+                if (val & 0x80) debug_stats.ppustatus_vblank_set_reads++;
+                if (val & 0x40) debug_stats.ppustatus_sprite0_set_reads++;
+                if (debug_stats.ppustatus_reads == 10000 ||
+                    debug_stats.ppustatus_reads == 50000 ||
+                    debug_stats.ppustatus_reads == 100000) {
+                    fprintf(stderr,
+                            "PPUSTATUS_POLL: reads=%llu val=%02X vblank_reads=%llu sp0_reads=%llu | PPU sl=%d dot=%d status=%02X ctrl=%02X mask=%02X v=%04X t=%04X x=%d w=%d | OAM0 Y=%u tile=%02X attr=%02X X=%u\n",
+                            (unsigned long long)debug_stats.ppustatus_reads,
+                            val,
+                            (unsigned long long)debug_stats.ppustatus_vblank_set_reads,
+                            (unsigned long long)debug_stats.ppustatus_sprite0_set_reads,
+                            active_ppu->scanline, active_ppu->dot, active_ppu->status,
+                            active_ppu->ctrl, active_ppu->mask, active_ppu->v, active_ppu->t,
+                            active_ppu->x, active_ppu->w,
+                            active_ppu->oam[0], active_ppu->oam[1], active_ppu->oam[2], active_ppu->oam[3]);
+                }
+            }
+            return val;
+        }
         return 0x00;
     }
     if (addr <= 0x401F) {
@@ -80,11 +134,28 @@ void bus_write(Word addr, Byte data) {
         return;
     }
     if (addr <= 0x3FFF) {
-        if (active_ppu) ppu_reg_write(active_ppu, addr & 0x07, data);
+        if (active_ppu) {
+            Byte reg = addr & 0x07;
+            if (reg == 0x03) {
+                debug_stats.oamaddr_writes++;
+                debug_stats.last_oamaddr_value = data;
+            } else if (reg == 0x04) {
+                debug_stats.oamdata_writes++;
+            } else if (reg == 0x05) {
+                debug_stats.ppuscroll_writes++;
+            } else if (reg == 0x06) {
+                debug_stats.ppuaddr_writes++;
+            } else if (reg == 0x07) {
+                debug_stats.ppudata_writes++;
+            }
+            ppu_reg_write(active_ppu, reg, data);
+        }
         return;
     }
     if (addr == 0x4014) {
         /* OAM DMA: copy 256 bytes from CPU page $XX00-$XXFF to PPU OAM */
+        debug_stats.oamdma_starts++;
+        debug_stats.last_oamdma_page = data;
         dma_page     = data;
         dma_addr     = 0x00;
         dma_transfer = 1;
@@ -110,6 +181,16 @@ void bus_write(Word addr, Byte data) {
     }
     /* 0x4020–0xFFFF: cartridge space */
     if (active_mapper) {
+        if (active_mapper->cart &&
+            active_mapper->cart->mapper_id == 1 &&
+            addr >= 0x8000) {
+            /* MMC1 quirk: ignore additional writes from the same CPU instruction.
+               This filters RMW double-writes that otherwise corrupt serial load. */
+            if (last_mmc1_write_instruction_id == current_instruction_id) {
+                return;
+            }
+            last_mmc1_write_instruction_id = current_instruction_id;
+        }
         mapper_prg_write(active_mapper, addr, data);
         return;
     }
@@ -133,8 +214,11 @@ int bus_dma_tick(uint64_t system_clock) {
         dma_data = bus_read((Word)dma_page << 8 | dma_addr);
     } else {
         /* Odd: write it to PPU OAM */
-        if (active_ppu)
-            active_ppu->oam[dma_addr] = dma_data;
+        if (active_ppu) {
+            /* OAM DMA starts at current OAMADDR and wraps at 256 bytes. */
+            Byte oam_index = (Byte)(active_ppu->oam_addr + dma_addr);
+            active_ppu->oam[oam_index] = dma_data;
+        }
         dma_addr++;
         if (dma_addr == 0x00) {
             /* All 256 bytes written — DMA complete */

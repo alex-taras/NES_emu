@@ -19,6 +19,12 @@ void controller_write(Controller *c, Byte data) {
 }
 
 Byte controller_read(Controller *c) {
+    if (c->strobe) {
+        /* While strobe is high, controller continuously reports A button. */
+        c->shift = c->state;
+        return c->state & 0x01;
+    }
+
     Byte bit = (c->shift & 0x01); /* LSB out */
     c->shift >>= 1;
     c->shift |= 0x80; /* fill with 1s (open bus) so reads past 8 return 1 */
