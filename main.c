@@ -22,7 +22,6 @@ static void apu_sdl_callback(void *userdata, Uint8 *stream, int len) {
 }
 
 int main(int argc, char **argv) {
-    fprintf(stderr, "DBG_TRACE_ACTIVE build=2026-05-28b\n");
     CPU cpu;
     Controller ctrl1;
     controller_reset(&ctrl1);
@@ -175,7 +174,12 @@ int main(int argc, char **argv) {
                     cpu.nmi_pending = 1;
                 }
 
-                /* 3. CPU/DMA and APU run at 1/3 the rate */
+                /* 3. Mapper IRQ propagation — check after every PPU dot */
+                if (mapper_irq_pending(ppu.mapper)) {
+                    cpu.irq_pending = 1;
+                }
+
+                /* 4. CPU/DMA and APU run at 1/3 the rate */
                 if (system_clock % 3 == 0) {
                     if (apu_enabled) apu_tick(&apu);  /* APU ticks at CPU rate */
                     if (bus_dma_active()) {

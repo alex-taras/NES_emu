@@ -52,7 +52,6 @@ Byte ppu_vram_read(PPU *ppu, Word addr) {
     addr &= 0x3FFF;
 
     if (addr <= 0x1FFF) {
-        /* Pattern tables: from cartridge CHR via mapper */
         return mapper_chr_read(ppu->mapper, addr);
     }
     if (addr <= 0x2FFF) {
@@ -425,6 +424,15 @@ void ppu_tick(PPU *ppu) {
 
     /* ── Visible scanlines (0–239) ── */
     if (sl <= 239 || sl == 261) {
+        /*
+         * Deterministic MMC3 scanline clock approximation.
+         * Our sprite fetch path is sprite_count-dependent, so relying on CHR
+         * reads under-clocks MMC3 on empty-sprite scanlines.
+         */
+        if (rendering && dot == 260) {
+            mapper_ppu_a12_tick(ppu->mapper, 0x1000);
+        }
+
         /* Shift registers (dots 2–257, 322–337) */
         if ((dot >= 2 && dot <= 257) || (dot >= 321 && dot <= 337)) {
             shift_bg(ppu);

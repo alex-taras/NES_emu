@@ -28,6 +28,7 @@ typedef struct {
 
   Byte flags;
   Byte nmi_pending;   /* set by PPU; cleared by CPU after NMI handler entry */
+  Byte irq_pending;   /* set by mapper; cleared by CPU after IRQ handler entry */
   int  cycles_remaining;  /* dots remaining for current instruction (counts down to 0) */
 
   /* scratch fields used by the lookup-table dispatcher */

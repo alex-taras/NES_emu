@@ -48,6 +48,7 @@ void cpu_reset(CPU *cpu) {
     cpu->addr_mode_id = AM_IMP;
     cpu->cycles       = 0;
     cpu->nmi_pending  = 0;
+    cpu->irq_pending  = 0;
     cpu->cycles_remaining = 0;
 
     bus_reset();
@@ -924,7 +925,7 @@ void cpu_step(CPU *cpu) {
     Byte op_extra = ins->op(cpu);
     cpu->cycles += ins->cycles + (am_extra & op_extra);
 
-    /* NMI check at end of cpu_step */
+    /* NMI check at end of cpu_step (NMI has priority over IRQ) */
     if (cpu->nmi_pending) {
         cpu->nmi_pending = 0;
         stack_push((cpu->PC >> 8) & 0xFF, cpu);
@@ -935,6 +936,17 @@ void cpu_step(CPU *cpu) {
         stack_push(p, cpu);
         cpu_set_flag(I, 1, cpu);
         cpu->PC = (Word)bus_read(0xFFFA) | ((Word)bus_read(0xFFFB) << 8);
+        cpu->cycles += 7;
+    } else if (cpu->irq_pending && !cpu_read_flag(I, cpu)) {
+        cpu->irq_pending = 0;
+        stack_push((cpu->PC >> 8) & 0xFF, cpu);
+        stack_push(cpu->PC & 0xFF, cpu);
+        Byte p = cpu->flags;
+        p &= ~(1 << B);
+        p |=  (1 << U);
+        stack_push(p, cpu);
+        cpu_set_flag(I, 1, cpu);
+        cpu->PC = (Word)bus_read(0xFFFE) | ((Word)bus_read(0xFFFF) << 8);
         cpu->cycles += 7;
     }
 }

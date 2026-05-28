@@ -13,6 +13,10 @@ typedef struct {
     void (*chr_write)(Mapper *m, Word addr, Byte data);
     Byte (*get_mirroring)(Mapper *m);
     void (*destroy)  (Mapper *m);
+    /* Optional hooks for advanced mappers */
+    void (*ppu_a12_tick)(Mapper *m, Word ppu_addr);
+    Byte (*irq_pending)(Mapper *m);
+    void (*irq_ack)(Mapper *m);
 } MapperOps;
 
 struct Mapper {
@@ -45,6 +49,22 @@ static inline Byte mapper_get_mirroring(Mapper *m) {
         return m->ops->get_mirroring(m);
     }
     return 0;  /* fallback to default */
+}
+static inline void mapper_ppu_a12_tick(Mapper *m, Word ppu_addr) {
+    if (m && m->ops->ppu_a12_tick) {
+        m->ops->ppu_a12_tick(m, ppu_addr);
+    }
+}
+static inline Byte mapper_irq_pending(Mapper *m) {
+    if (m && m->ops->irq_pending) {
+        return m->ops->irq_pending(m);
+    }
+    return 0;
+}
+static inline void mapper_irq_ack(Mapper *m) {
+    if (m && m->ops->irq_ack) {
+        m->ops->irq_ack(m);
+    }
 }
 
 #endif
