@@ -52,6 +52,7 @@ Byte ppu_vram_read(PPU *ppu, Word addr) {
     addr &= 0x3FFF;
 
     if (addr <= 0x1FFF) {
+        mapper_ppu_a12_tick(ppu->mapper, addr);
         return mapper_chr_read(ppu->mapper, addr);
     }
     if (addr <= 0x2FFF) {
@@ -337,7 +338,7 @@ static void compose_pixel(PPU *ppu) {
 
 /* ── Sprite evaluation ────────────────────────────────────────────────────── */
 
-static void evaluate_sprites(PPU *ppu) {
+static void evaluate_sprites(PPU *ppu, int target_scanline) {
     memset(ppu->secondary_oam, 0xFF, 32);
     ppu->sprite_count = 0;
     ppu->sprite_zero_on_line = 0;
@@ -346,7 +347,7 @@ static void evaluate_sprites(PPU *ppu) {
 
     for (int i = 0; i < 64; i++) {
         int y = (int)ppu->oam[i * 4];   /* Y position (sprite drawn on scanlines y+1..y+height) */
-        int diff = ppu->scanline - y;    /* evaluate at scanline N → renders on N+1 */
+        int diff = target_scanline - (y + 1);
         if (diff >= 0 && diff < height) {
             if (ppu->sprite_count < 8) {
                 memcpy(&ppu->secondary_oam[ppu->sprite_count * 4], &ppu->oam[i * 4], 4);
@@ -360,7 +361,7 @@ static void evaluate_sprites(PPU *ppu) {
     }
 }
 
-static void fetch_sprites(PPU *ppu) {
+static void fetch_sprites(PPU *ppu, int target_scanline) {
     int height = (ppu->ctrl & 0x20) ? 16 : 8;
 
     for (int i = 0; i < ppu->sprite_count; i++) {
@@ -369,7 +370,7 @@ static void fetch_sprites(PPU *ppu) {
         Byte attr   = ppu->secondary_oam[i * 4 + 2];
         Byte x_pos  = ppu->secondary_oam[i * 4 + 3];
 
-        int row = ppu->scanline - (int)y_pos;   /* render target = scanline+1, sprite top = y_pos+1 */
+        int row = target_scanline - ((int)y_pos + 1);
         int flip_v = attr & 0x80;
         if (flip_v) row = (height - 1) - row;
 
@@ -424,15 +425,6 @@ void ppu_tick(PPU *ppu) {
 
     /* ── Visible scanlines (0–239) ── */
     if (sl <= 239 || sl == 261) {
-        /*
-         * Deterministic MMC3 scanline clock approximation.
-         * Our sprite fetch path is sprite_count-dependent, so relying on CHR
-         * reads under-clocks MMC3 on empty-sprite scanlines.
-         */
-        if (rendering && dot == 260) {
-            mapper_ppu_a12_tick(ppu->mapper, 0x1000);
-        }
-
         /* Shift registers (dots 2–257, 322–337) */
         if ((dot >= 2 && dot <= 257) || (dot >= 321 && dot <= 337)) {
             shift_bg(ppu);
@@ -466,8 +458,8 @@ void ppu_tick(PPU *ppu) {
 
         /* Sprite evaluation / fetch at end of visible scanline */
         if (sl < 240) {
-            if (dot == 257) evaluate_sprites(ppu);  /* after last pixel */
-            if (dot == 320) fetch_sprites(ppu);
+            if (dot == 257) evaluate_sprites(ppu, sl + 1);  /* prepare next scanline */
+            if (dot == 320) fetch_sprites(ppu, sl + 1);
         }
     }
 
