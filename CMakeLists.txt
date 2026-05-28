@@ -8,6 +8,7 @@ set(MAPPER_SOURCES
     mapper.c
     mapper0.c
     mapper1.c
+    mapper2.c
 )
 
 set(PPU_SOURCES ppu.c)
